@@ -70,9 +70,19 @@ def size_report(model: TinyLM) -> dict:
     }
 
 
-def run_one(key: str, args) -> dict:
+OPTIMS = {
+    "adamw": dict(optim="adamw", ns=5, label="AdamW"),
+    "muon": dict(optim="muon", ns=5, label="torch Muon 5 NS"),
+    "muon10": dict(optim="muon", ns=10, label="torch Muon 10 NS"),
+    "muon_ds": dict(optim="muon_ds", ns=10, label="DeepSeek Muon"),
+}
+
+
+def run_one(spec: str, args) -> dict:
     torch.set_num_threads(args.threads)
-    c = CONFIGS[key]
+    key, _, okey = spec.partition(":")
+    c = dict(CONFIGS[key])
+    o = OPTIMS[okey or "adamw"]
     source = MarkovSource(vocab=args.vocab, seed=args.seed)  # same seed -> identical stream for every config
     eval_batches = [source.sample(args.batch, args.seq_len) for _ in range(4)]
     floor = sum(source.entropy_floor(b) for b in eval_batches) / len(eval_batches)
@@ -84,14 +94,18 @@ def run_one(key: str, args) -> dict:
     t0 = time.perf_counter()
     res = train(cfg, source, args.steps, args.batch, args.lr, args.device, log_every=args.steps,
                 weight_decay=args.weight_decay, latent_lr_mult=0.1, eval_batches=eval_batches, seed=args.seed,
-                verbose=False, fp_warmup=c["fp_warmup"], optim=c["optim"])
+                verbose=False, fp_warmup=c["fp_warmup"], optim=o["optim"], muon_ns_steps=o["ns"])
     wall = time.perf_counter() - t0
     train_peak = (torch.cuda.max_memory_allocated() / 2**20 if args.device.startswith("cuda")
                   else _rss_mib() - rss0)
     model = res["model"].eval()
     sizes = size_report(model)
-    # AdamW keeps exp_avg + exp_avg_sq: 2x params, FP32
-    opt_state_bytes = 2 * sizes["train_param_bytes"]
+    # AdamW keeps exp_avg + exp_avg_sq (2x params); Muon keeps one momentum buffer for its 2D block matrices
+    from .train import param_groups
+    groups = param_groups(model, 1.0, 1.0, 0.0)
+    muon_bytes = sum(_bytes(g["params"]) for g in groups if g["name"] in ("hidden", "latent"))
+    opt_state_bytes = (2 * sizes["train_param_bytes"] if o["optim"] == "adamw"
+                       else muon_bytes + 2 * (sizes["train_param_bytes"] - muon_bytes))
     xb = eval_batches[0][:, :-1].to(args.device)
     with torch.no_grad():
         for _ in range(3):
@@ -103,7 +117,8 @@ def run_one(key: str, args) -> dict:
             torch.cuda.synchronize()
         infer_ms = (time.perf_counter() - t) / 20 * 1e3
     return {
-        "key": key, "label": c["label"].format(bpw=f"{args.bpw:g}"), "final_eval": res["final_eval"], "entropy_floor": floor,
+        "key": key, "optim": okey or "adamw",
+        "label": c["label"].format(bpw=f"{args.bpw:g}") + ("" if not okey else f" [{o['label']}]"), "final_eval": res["final_eval"], "entropy_floor": floor,
         "steps": args.steps, "tokens": args.steps * args.batch * args.seq_len,
         "fp_warmup_steps": c["fp_warmup"], "wall_s": wall, "ms_per_step": wall / args.steps * 1e3,
         "train_peak_mib": train_peak, "train_state_bytes": 2 * sizes["train_param_bytes"] + opt_state_bytes,
@@ -123,7 +138,7 @@ def table(rows: list[dict]) -> str:
          + (f" ({r['fp_warmup_steps']} FP)" if r["fp_warmup_steps"] else "")),
         ("Wall time (ms/step)", lambda r: f"{r['wall_s']:.0f} s ({r['ms_per_step']:.0f})"),
         ("Trainable params (FP32 while training)", lambda r: f"{r['trainable_params']:,}"),
-        ("Train state: weights+grads+AdamW", lambda r: mib(r["train_state_bytes"])),
+        ("Train state: weights+grads+optimizer", lambda r: mib(r["train_state_bytes"])),
         ("Train peak memory (RSS delta / CUDA peak)", lambda r: f"{r['train_peak_mib']:.0f} MiB"),
         ("Deployed block linears", lambda r: f"{kib(r['deployed_block_bytes'])} ({r['block_bpw']:.2f} bpw)"),
         ("Deployed whole model", lambda r: kib(r["deployed_total_bytes"])),
@@ -140,7 +155,8 @@ def table(rows: list[dict]) -> str:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--configs", default=",".join(CONFIGS))
+    ap.add_argument("--configs", default=",".join(CONFIGS),
+                    help="comma list of config[:optim], optim in " + ",".join(OPTIMS))
     ap.add_argument("--one", help=argparse.SUPPRESS)
     ap.add_argument("--steps", type=int, default=1500)
     ap.add_argument("--batch", type=int, default=32)

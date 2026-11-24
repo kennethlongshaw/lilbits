@@ -165,6 +165,23 @@ so wall-clock is a wash at this size. More Newton-Schulz steps and the two-phase
 results. On LittleBit latents AdamW still wins; 10 NS steps (stock or DeepSeek) close part of the gap vs
 5 steps, and the DeepSeek two-phase schedule adds nothing over plain 10 steps. QK-norm didn't help either.
 
+### Full benchmark across optimizers (`lb-bench --configs fp:muon_ds,...`)
+
+`uv run lb-bench --bpw 1.41 --parallel --configs fp:adamw,fp:muon,fp:muon10,fp:muon_ds` (and the same with
+`lb_warm`). Matched params, weight decay 0, 4 runs at a time on 1 CPU thread each (both batches the same way).
+Saved as `results/bench_d128_matched_params_optimizers.json`.
+
+| run | final loss | steps / tokens | wall time (per step) | trainable params | weights+grads+opt state | peak train memory | stored blocks | stored model | inference/batch |
+|---|---|---|---|---|---|---|---|---|---|
+| FP, AdamW | 0.984 | 1,500 / 3.07M | 109 s (73 ms) | 412,288 | 6.29 MiB | 230 MiB | 772.0 KiB (16.00 bpw) | 805.2 KiB | 16.2 ms |
+| FP, PyTorch Muon 5 steps | 0.980 | 1,500 / 3.07M | 126 s (84 ms) | 412,288 | 4.78 MiB | 236 MiB | 772.0 KiB (16.00 bpw) | 805.2 KiB | 16.1 ms |
+| FP, PyTorch Muon 10 steps | 0.980 | 1,500 / 3.07M | 146 s (97 ms) | 412,288 | 4.78 MiB | 234 MiB | 772.0 KiB (16.00 bpw) | 805.2 KiB | 15.8 ms |
+| FP, DeepSeek Muon | 0.979 | 1,500 / 3.07M | 139 s (92 ms) | 412,288 | 4.78 MiB | 227 MiB | 772.0 KiB (16.00 bpw) | 805.2 KiB | 16.5 ms |
+| LittleBit, AdamW | 1.056 | 1,500 (300 FP) / 3.07M | 144 s (96 ms) | 410,256 | 6.26 MiB | 237 MiB | 67.7 KiB (1.40 bpw) | 101.0 KiB | 21.3 ms |
+| LittleBit, PyTorch Muon 5 steps | 1.084 | 1,500 (300 FP) / 3.07M | 185 s (123 ms) | 410,256 | 4.80 MiB | 251 MiB | 67.7 KiB (1.40 bpw) | 101.0 KiB | 23.0 ms |
+| LittleBit, PyTorch Muon 10 steps | 1.066 | 1,500 (300 FP) / 3.07M | 203 s (135 ms) | 410,256 | 4.80 MiB | 253 MiB | 67.7 KiB (1.40 bpw) | 101.0 KiB | 25.8 ms |
+| LittleBit, DeepSeek Muon | 1.065 | 1,500 (300 FP) / 3.07M | 182 s (121 ms) | 410,256 | 4.80 MiB | 235 MiB | 67.7 KiB (1.40 bpw) | 101.0 KiB | 27.4 ms |
+
 ## Baseline vs LittleBit on the same data (`uv run lb-bench`)
 
 All three train on the identical Markov token stream (same seed), d_model 128, 2 blocks, batch 32 × seq 64,
