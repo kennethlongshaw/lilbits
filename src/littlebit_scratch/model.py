@@ -17,6 +17,7 @@ from torch import nn
 
 from .bitnet import BitLinear
 from .littlebit import LittleBitLinear
+from .mixers import GatedDeltaNet
 
 
 @dataclass
@@ -37,6 +38,10 @@ class Config:
     init: str = "small"
     qk_norm: bool = False
     itq_iters: int = 0  # >0: Joint-ITQ rotation before binarizing (svd init / FP warm start)
+    # token mixer: "softmax" (causal attention) or "gdn" (Gated DeltaNet linear attention)
+    mixer: str = "softmax"
+    conv_size: int = 4  # gdn: short causal conv kernel on q/k/v
+    lb_gates: bool = False  # gdn: also LittleBit the per-head decay/beta projections (default keeps them FP)
 
 
 LinearFactory = Callable[[int, int], nn.Module]
@@ -96,11 +101,21 @@ class SwiGLU(nn.Module):
         return self.down(F.silu(self.gate(x)) * self.up(x))
 
 
+def make_mixer(d_model: int, n_heads: int, linear: LinearFactory, mixer: str = "softmax", qk_norm: bool = False,
+               conv_size: int = 4, lb_gates: bool = False) -> nn.Module:
+    if mixer == "softmax":
+        return Attention(d_model, n_heads, linear, qk_norm)
+    if mixer == "gdn":
+        return GatedDeltaNet(d_model, n_heads, linear, conv_size, lb_gates)
+    raise ValueError(f"unknown mixer {mixer!r}")
+
+
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, mlp_hidden: int, linear: LinearFactory, qk_norm: bool = False):
+    def __init__(self, d_model: int, n_heads: int, mlp_hidden: int, linear: LinearFactory, qk_norm: bool = False,
+                 mixer: str = "softmax", conv_size: int = 4, lb_gates: bool = False):
         super().__init__()
         self.norm1 = nn.RMSNorm(d_model)
-        self.attn = Attention(d_model, n_heads, linear, qk_norm)
+        self.attn = make_mixer(d_model, n_heads, linear, mixer, qk_norm, conv_size, lb_gates)
         self.norm2 = nn.RMSNorm(d_model)
         self.mlp = SwiGLU(d_model, mlp_hidden, linear)
 
@@ -118,7 +133,9 @@ class TinyLM(nn.Module):
         self.tok = nn.Embedding(cfg.vocab_size, cfg.d_model)
         self.pos = nn.Embedding(cfg.seq_len, cfg.d_model)
         self.blocks = nn.ModuleList(
-            TransformerBlock(cfg.d_model, cfg.n_heads, hidden, linear, cfg.qk_norm) for _ in range(cfg.n_layers)
+            TransformerBlock(cfg.d_model, cfg.n_heads, hidden, linear, cfg.qk_norm, cfg.mixer, cfg.conv_size,
+                             cfg.lb_gates)
+            for _ in range(cfg.n_layers)
         )
         self.norm = nn.RMSNorm(cfg.d_model)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)

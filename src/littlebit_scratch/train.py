@@ -68,7 +68,8 @@ def param_groups(model: torch.nn.Module, lr: float, scale_lr_mult: float, weight
     hidden, embed, no_decay = [], [], []
     for name, p in model.named_parameters():
         if id(p) not in seen:
-            (no_decay if p.dim() < 2 else hidden if name.startswith("blocks.") else embed).append(p)
+            # Only 2D matrices go to "hidden"/"embed" (Muon-eligible); conv kernels (3D) and vectors don't.
+            (no_decay if p.dim() != 2 else hidden if name.startswith("blocks.") else embed).append(p)
     groups = [
         {"name": "hidden", "params": hidden, "lr": lr, "weight_decay": weight_decay},
         {"name": "embed", "params": embed, "lr": lr, "weight_decay": weight_decay},

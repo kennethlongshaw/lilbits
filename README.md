@@ -113,6 +113,27 @@ FP16 baseline on seed 0: 0.984 default, 0.978 tuned.
 - LittleBit steps are ~1.3-1.4× slower on CPU at this width: each layer adds sign/STE and scale ops on its
   small factors. Matmul FLOPs are about equal at 1.4 bpw.
 
+## Linear-attention mixers (Gated DeltaNet)
+
+`--model.mixer gdn` swaps causal softmax attention for Gated DeltaNet (Yang et al., ICLR 2025), the
+linear-attention mixer in the Qwen3-Next / Qwen3.8-Flash-Next hybrids. LittleBit compresses its five
+d×d projections (q, k, v, output gate, o). The per-head decay/beta projections, short convs, `A_log` and
+`dt_bias` stay full precision; `--model.lb_gates true` binarizes the decay/beta projections too. The
+recurrence is a naive per-token loop (`mixers.gated_delta_rule`): exact, but ~4.5× slower than softmax on CPU.
+
+Seed 0, default settings (AdamW; LittleBit = 300-step FP warm start + SVD+ITQ, `--model.bpw 1.41`),
+1,500 steps, entropy floor 0.895. Logs and JSON in `results/gdn/`.
+
+| mixer | FP16 eval | LittleBit eval | gap | LittleBit block bpw |
+|---|---|---|---|---|
+| softmax | 0.984 | 1.050 | 0.066 | 1.40 |
+| Gated DeltaNet | 0.981 | 1.068 | 0.087 | 1.47 (FP16 gate projections counted) |
+| Gated DeltaNet, gates binarized too | — | 1.070 | 0.089 | 1.44 |
+
+One seed only; the seed-to-seed spread on this task is a few hundredths, so the softmax/GDN difference
+is not established. Binarizing the tiny gate projections cost nothing measurable here, but with
+seq_len 64 this setup cannot show error building up in the recurrent state over long contexts.
+
 ## The layer
 
 Every block linear (`q, k, v, o, gate, up, down`) stores
@@ -353,6 +374,7 @@ residual paths.
 
 - `src/littlebit_scratch/littlebit.py`: `LittleBitLinear`, STEs, bpw accounting, SVD/ITQ init
 - `src/littlebit_scratch/model.py`: attention, SwiGLU, `TransformerBlock`, `TinyLM`, FP → LittleBit conversion
+- `src/littlebit_scratch/mixers.py`: Gated DeltaNet linear-attention mixer (`--model.mixer gdn`)
 - `src/littlebit_scratch/bitnet.py`: BitNet b1.58 `BitLinear` baseline (`--linear bitnet`)
 - `src/littlebit_scratch/data.py`: Markov source with known entropy floor, char-level text source
 - `src/littlebit_scratch/train.py`: Lightning Fabric training loop, `TrainConfig`, `lb-train` CLI (jsonargparse)
