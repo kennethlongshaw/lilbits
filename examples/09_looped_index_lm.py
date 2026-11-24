@@ -36,6 +36,7 @@ import torch
 import torch.nn.functional as F
 
 from lilbits.data import RecallSource
+from lilbits.inference.lut import pack_lut
 from lilbits.measure import Meter
 from lilbits.models.looped_index import LoopedIndexConfig, LoopedIndexLM, convert_core_to_littlebit, memory_tiers
 from lilbits.runner import Example, fit, run
@@ -70,6 +71,12 @@ def add_args(ap):
     ap.add_argument("--d", type=int, default=64)
     ap.add_argument("--loops", type=int, default=3)
     ap.add_argument("--gen", type=int, default=24, help="infer: tokens to decode")
+    ap.add_argument(
+        "--kernel",
+        default="native",
+        choices=["native", "lut"],
+        help="infer: run the LittleBit prelude and looped core on the LUT kernels",
+    )
 
 
 def build(args, meta):
@@ -123,6 +130,10 @@ def infer_fn(models, args):
     model.use_index, model.distill = True, False
     prompt = held_out(args)[0][:1, : args.length - 1]
     rows = {}
+    native = None
+    if args.kernel == "lut":
+        native, _ = model.generate(prompt, args.gen)
+        pack_lut(model)  # signs stay 1-bit; per-loop scales become per-loop kernel scale sets
 
     def timed(fn):
         t, c = time.perf_counter(), time.process_time()
@@ -152,6 +163,8 @@ def infer_fn(models, args):
     }
     distinct = len(set(greedy[0, prompt.shape[1] :].tolist()))
     return {
+        "kernel": args.kernel,
+        **({"lut_greedy_same_as_native": torch.equal(native, greedy)} if native is not None else {}),
         "decode": rows,
         "greedy_distinct_tokens": distinct,  # a smoke-trained model repeats filler: drafts are trivially accepted
         "memory_tiers": memory_tiers(model, st2["cache"], prompt.shape[1] + args.gen),
@@ -159,7 +172,7 @@ def infer_fn(models, args):
 
 
 EXAMPLE = Example(
-    "09_looped_index_lm", __doc__ or "", add_args, build, train_fn, test_fn, infer_fn, runtime_args=("gen",)
+    "09_looped_index_lm", __doc__ or "", add_args, build, train_fn, test_fn, infer_fn, runtime_args=("gen", "kernel")
 )
 
 if __name__ == "__main__":

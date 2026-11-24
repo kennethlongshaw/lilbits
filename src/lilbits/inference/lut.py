@@ -40,6 +40,7 @@ from torch import nn
 from lilbits.inference.packed import PackedLittleBitLinear, persistent_bytes, set_scales, unpack_signs
 from lilbits.layers.bitnet import BitLinear, PackedBitLinear, act_quant
 from lilbits.layers.littlebit import LittleBitLinear
+from lilbits.layers.loop_scaled import LoopScaledLinear
 
 _SRC = Path(__file__).with_name("lut_kernel.c")
 _lib: ctypes.CDLL | None = None
@@ -203,25 +204,30 @@ class LUTLittleBitLinear(nn.Module):
     def paths(self) -> int:
         return self.U_codes.shape[0]
 
-    def weight(self) -> torch.Tensor:
-        """Dense effective weight (prefill path and tests)."""
+    def weight(self, scales: tuple | None = None) -> torch.Tensor:
+        """Dense effective weight (prefill path and tests). scales: optional (g, l, h) FP32 overrides."""
+        g, l, h = scales if scales is not None else (self.g.float(), self.l.float(), self.h.float())
         W = torch.zeros(self.out_features, self.in_features)
         for i in range(self.paths):
             Su = unpack_sign_codes(self.U_codes[i], self.out_features, self.rank)
             Sv = unpack_sign_codes(self.V_codes[i], self.rank, self.in_features)
-            W += self.h[i].float()[:, None] * ((Su * self.l[i].float()) @ Sv) * self.g[i].float()[None, :]
+            W += h[i][:, None] * ((Su * l[i]) @ Sv) * g[i][None, :]
         return W
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, scales: tuple | None = None, key=None) -> torch.Tensor:
+        """scales: optional (g, l, h) FP32 (P, n) overrides, e.g. per-loop effective scales; `key` names them
+        for the dense-prefill cache."""
         lead, dt = x.shape[:-1], x.dtype
         x2 = x.reshape(-1, self.in_features).float()
         if x2.shape[0] > self.max_lut_tokens:  # prefill: one unpack, then a dense matmul
-            cache = self.__dict__.get("_dense")
-            if cache is None:
-                cache = self.__dict__["_dense"] = self.weight()
-            y = x2 @ cache.t()
+            dense = self.__dict__.setdefault("_dense", {})
+            if key not in dense:
+                dense[key] = self.weight(scales)
+            y = x2 @ dense[key].t()
         elif (lib := _load()) is not None and x2.device.type == "cpu":
             g, l, h, bias = _f32(self, "g", "l", "h", "bias")
+            if scales is not None:
+                g, l, h = scales
             x2 = x2.contiguous()
             N, (P, OBr, Gi, _), (_, OBo, Gr, _) = x2.shape[0], self.V_codes.shape, self.U_codes.shape
             xs, ti = torch.empty(4 * Gi), torch.empty(Gi * 16)
@@ -234,10 +240,11 @@ class LUTLittleBitLinear(nn.Module):
             )
             return y.to(dt).view(*lead, self.out_features)
         else:
+            g, l, h = scales if scales is not None else (self.g.float(), self.l.float(), self.h.float())
             y = torch.zeros(x2.shape[0], self.out_features)
             for i in range(self.paths):
-                t = lut_matmul(x2 * self.g[i].float(), self.V_codes[i], self.rank)
-                y += lut_matmul(t * self.l[i].float(), self.U_codes[i], self.out_features) * self.h[i].float()
+                t = lut_matmul(x2 * g[i], self.V_codes[i], self.rank)
+                y += lut_matmul(t * l[i], self.U_codes[i], self.out_features) * h[i]
         if self.bias is not None:
             y += self.bias.float()
         return y.to(dt).view(*lead, self.out_features)
@@ -311,11 +318,65 @@ class LUTBitLinear(nn.Module):
         return persistent_bytes(self)
 
 
+class LUTLoopScaledLinear(nn.Module):
+    """Inference form of `LoopScaledLinear`: one LUT layer (signs stored once) plus per-loop FP16 scales.
+
+    Over LittleBit, loop i runs the fused kernel with effective scales (g_p g_i, l_p l_i, h_p h_i), built once per
+    loop and cached. Over other bases (BitNet LUT, FP), it computes base(x * g_i) * h_i."""
+
+    g: torch.Tensor
+    h: torch.Tensor
+    l: torch.Tensor | None
+
+    def __init__(self, layer: LoopScaledLinear, max_lut_tokens: int = 8):
+        super().__init__()
+        base = layer.base
+        self.in_features, self.out_features, self.n_loops = layer.in_features, layer.out_features, layer.n_loops
+        self.loop = 0
+        if isinstance(base, LittleBitLinear):
+            self.base: nn.Module = LUTLittleBitLinear(base, max_lut_tokens)
+        elif isinstance(base, BitLinear):
+            self.base = LUTBitLinear(base, max_lut_tokens)
+        else:
+            self.base = base
+        self.register_buffer("g", layer.g.detach().half().clone())
+        self.register_buffer("h", layer.h.detach().half().clone())
+        self.register_buffer("l", None if layer.l is None else layer.l.detach().half().clone())
+
+    def _scales(self, i: int) -> tuple:
+        cache = self.__dict__.setdefault("_loop_scales", {})
+        if i not in cache:
+            b = self.base
+            assert isinstance(b, LUTLittleBitLinear) and self.l is not None
+            g, l, h = (getattr(b, n).float() for n in "glh")
+            cache[i] = tuple(
+                t.contiguous() for t in (g * self.g[i].float(), l * self.l[i].float(), h * self.h[i].float())
+            )
+        return cache[i]
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        i = self.loop
+        if isinstance(self.base, LUTLittleBitLinear):
+            y = self.base(x, self._scales(i), key=i)
+            if self.base.bias is not None:  # the loop's h_i scales the bias too; the kernel added it unscaled
+                y = y + (self.base.bias.float() * (self.h[i].float() - 1)).to(y.dtype)
+            return y
+        return self.base(x * self.g[i].to(x.dtype)) * self.h[i].to(x.dtype)
+
+    def storage_bytes(self) -> int:
+        fn = getattr(self.base, "storage_bytes", None)
+        base = fn() if callable(fn) else persistent_bytes(self.base)
+        return base + sum(t.numel() * t.element_size() for t in (self.g, self.h, self.l) if t is not None)
+
+
 @torch.no_grad()
 def pack_lut(model: nn.Module, max_lut_tokens: int = 8) -> nn.Module:
-    """In place: LittleBit / BitNet linears (latent or packed) -> LUT layers. Returns the model in eval mode."""
+    """In place: LittleBit / BitNet linears (latent or packed, plain or loop-scaled) -> LUT layers. Returns the
+    model in eval mode."""
     for name, child in list(model.named_children()):
-        if isinstance(child, (LittleBitLinear, PackedLittleBitLinear)):
+        if isinstance(child, LoopScaledLinear):
+            setattr(model, name, LUTLoopScaledLinear(child, max_lut_tokens))
+        elif isinstance(child, (LittleBitLinear, PackedLittleBitLinear)):
             setattr(model, name, LUTLittleBitLinear(child, max_lut_tokens))
         elif isinstance(child, (BitLinear, PackedBitLinear)):
             setattr(model, name, LUTBitLinear(child, max_lut_tokens))

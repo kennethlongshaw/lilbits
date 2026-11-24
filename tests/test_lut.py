@@ -82,3 +82,33 @@ def test_torch_fallback_without_compiler(monkeypatch):
         fallback = lut.LUTLittleBitLinear(lb)(x), lut.LUTBitLinear(bl)(x)
     for a, b in zip(fused, fallback, strict=True):
         torch.testing.assert_close(a, b, rtol=1e-4, atol=1e-4)
+
+
+def test_lut_loop_scaled_and_looped_index_decode():
+    from lilbits.layers.loop_scaled import LoopScaledLinear, set_loop
+    from lilbits.models.looped_index import LoopedIndexConfig, LoopedIndexLM, convert_core_to_littlebit
+
+    torch.manual_seed(0)
+    lb = LittleBitLinear(48, 40, rank=8, residual=True, bias=True, ste="clipped")
+    m = torch.nn.Sequential(LoopScaledLinear(lb, 3)).eval()
+    with torch.no_grad():
+        for p in m.parameters():
+            p.add_(torch.randn_like(p) * 0.1)
+        x = torch.randn(2, 48)
+        refs = []
+        for i in range(3):
+            set_loop(m, i)
+            refs.append(m(x))
+        lut.pack_lut(m)
+        assert isinstance(m[0], lut.LUTLoopScaledLinear)
+        for i in range(3):
+            set_loop(m, i)
+            torch.testing.assert_close(m(x), refs[i], rtol=1e-2, atol=5e-3)  # FP16-stored scales
+    model = LoopedIndexLM(LoopedIndexConfig(vocab_size=20, d_model=32, n_heads=2, block=8, top_k=4))
+    convert_core_to_littlebit(model)
+    model.eval()
+    p = torch.randint(0, 20, (1, 11))
+    g1, _ = model.generate(p, 8)
+    lut.pack_lut(model)
+    g2, _ = model.generate(p, 8)
+    assert torch.equal(g1, g2)

@@ -32,6 +32,11 @@ RUNS: list[tuple] = [
     ("01 train+pack, BitNet, LUT kernel", ["examples/01_train_and_pack.py", "--linear", "bitnet"], LUT),
     ("01 train+pack, FP", ["examples/01_train_and_pack.py", "--linear", "fp"]),
     ("02 recurrent mixers (stateful LMs)", ["examples/02_recurrent_mixers.py"]),
+    (
+        "02 recurrent mixers, LittleBit, LUT decode",
+        ["examples/02_recurrent_mixers.py", "--linear", "littlebit"],
+        ["--kernel", "lut"],
+    ),
     ("03 state rollback", ["examples/03_state_rollback.py"]),
     ("04 decision, LittleBit GDN", ["examples/04_decision_model.py", "--linear", "littlebit"]),
     ("04 decision, BitNet GDN", ["examples/04_decision_model.py", "--linear", "bitnet"]),
@@ -44,6 +49,7 @@ RUNS: list[tuple] = [
     ("07 byte-level: baseline / BLT / H-Net", ["examples/07_byte_level_patching.py"]),
     ("08 LLM-JEPA (LM / online / EMA / EMA+dropout)", ["examples/08_llm_jepa.py"]),
     ("09 looped index LM (5 stages + decode modes)", ["examples/09_looped_index_lm.py"]),
+    ("09 looped index LM, LUT decode", ["examples/09_looped_index_lm.py"], ["--kernel", "lut"]),
 ]
 METER_KEYS = ("wall_s", "cpu_s", "cpu_util", "peak_extra_mib")
 

@@ -24,6 +24,7 @@ testable on its own and has a dense FP reference.
 | Looped core | Shared-weight block applied N times (prelude / core / coda, input injection, sandwich norm) | ✅ | `models/recurrent_depth.py`, `examples/06_looped_reasoning_lm.py` |
 | | Sampled depth + truncated backprop (Huginn); learned exit gate (Ouro) | ✅ | `models/recurrent_depth.py` |
 | | Per-loop FP scales (h, g, l) over shared LittleBit signs | ✅ | `layers/loop_scaled.py` |
+| | LUT kernels in the looped core: signs packed once, per-loop effective scale sets for the fused kernel | ✅ greedy decode identical to native | `inference/lut.py` (`LUTLoopScaledLinear`), `examples/09_looped_index_lm.py --kernel lut` |
 | | Per-loop GDN state (shared weights, FP gates) | ✅ | `models/looped_index.py` |
 | | Loop memory: attend over passes 1..i of the same token | ✅ | `mixers/loop_memory.py` |
 | | Adaptive exit: freeze a position's state when KL between steps is small, or gate CDF ≥ q | ✅ (full-sequence; no KV-cache sharing across loops yet) | `models/recurrent_depth.py` |
@@ -58,8 +59,8 @@ testable on its own and has a dense FP reference.
   can reuse it.
 
 The whole design is assembled in `models/looped_index.py` (`LoopedIndexLM`) and trained stage by stage in
-`examples/09_looped_index_lm.py`. Still open: uneven bpw allocation, a sparse-gather retrieval kernel, LUT
-kernels inside the looped core, and a training run long enough to measure recall.
+`examples/09_looped_index_lm.py`. Still open: uneven bpw allocation, a sparse-gather retrieval kernel, and a training run long enough to
+measure recall.
 
 ## Build order (matches the training stages)
 

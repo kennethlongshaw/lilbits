@@ -63,9 +63,10 @@ class LoopScaledLinear(nn.Module):
 
 
 def set_loop(module: nn.Module, i: int) -> None:
+    """Select loop i in every loop-scaled layer (training or LUT inference form)."""
     for m in module.modules():
-        if isinstance(m, LoopScaledLinear):
-            m.loop = i
+        if hasattr(m, "n_loops") and hasattr(m, "loop"):
+            m.__dict__["loop"] = i
 
 
 def loop_linear_factory(base_factory, n_loops: int):

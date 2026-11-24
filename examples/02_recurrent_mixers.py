@@ -5,7 +5,8 @@ one single-token call per new token with nothing recomputed.
 
     train   one StatefulLM per mixer (GDN, Mamba2, GLA, mLSTM, minGRU) on the Markov source, Lightning Fabric
     test    held-out loss per mixer
-    infer   prefill a prompt, then decode token by token: ms per token, state bytes vs an attention K/V cache
+    infer   prefill a prompt, then decode token by token: ms per token, state bytes vs an attention K/V cache;
+            --kernel lut runs LittleBit / BitNet projections on the lookup-table kernels
 
     uv run python examples/02_recurrent_mixers.py
     uv run python examples/02_recurrent_mixers.py --linear littlebit --mode infer --gen 64
@@ -18,6 +19,7 @@ import time
 import torch.nn.functional as F
 
 from lilbits.data import MarkovSource
+from lilbits.inference.lut import pack_lut
 from lilbits.mixers.recurrent import MIXERS
 from lilbits.models.stateful_lm import StatefulLM, state_bytes
 from lilbits.models.tinylm import Config, make_linear_factory
@@ -32,6 +34,7 @@ def add_args(ap):
     ap.add_argument("--steps", type=int, default=15, help="training steps per mixer (default: smoke run)")
     ap.add_argument("--mixers", default=",".join(MIXERS))
     ap.add_argument("--gen", type=int, default=32, help="infer: tokens to decode")
+    ap.add_argument("--kernel", default="native", choices=["native", "lut"], help="infer: LUT kernels for LB/BitNet")
 
 
 def build(args, meta):
@@ -68,6 +71,8 @@ def infer_fn(models, args):
     prompt = held_out()[:1, :32]
     ms, sizes = {}, {}
     for name, m in models.items():
+        if args.kernel == "lut":
+            pack_lut(m)
         m.generate(prompt, 4)  # warm up
         t = time.perf_counter()
         _, states = m.generate(prompt, args.gen)
@@ -80,11 +85,12 @@ def infer_fn(models, args):
         "state_bytes": sizes,
         "attention_kv_bytes_same_length": kv,
         "context_tokens": T,
+        "kernel": args.kernel,
     }
 
 
 EXAMPLE = Example(
-    "02_recurrent_mixers", __doc__ or "", add_args, build, train_fn, test_fn, infer_fn, runtime_args=("gen",)
+    "02_recurrent_mixers", __doc__ or "", add_args, build, train_fn, test_fn, infer_fn, runtime_args=("gen", "kernel")
 )
 
 if __name__ == "__main__":
