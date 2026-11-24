@@ -10,6 +10,7 @@ dependencies = ["numpy>=1.26", "torch>=2.9"]
 lb-train = "littlebit_scratch.train:main"
 lb-bench = "littlebit_scratch.bench:main"
 lb-infer-bench = "littlebit_scratch.infer_bench:main"
+lb-mem-bench = "littlebit_scratch.mem_bench:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

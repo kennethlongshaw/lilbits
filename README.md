@@ -268,6 +268,34 @@ factors, which is how the paper deploys) would also cut weight memory traffic ~3
 memory-bound batch-1 decoding, especially on GPU. Not implemented here. The FP32 cache also means inference
 RAM for the factors is rank·(in+out)·4 bytes, not the packed size in the tables above.
 
+## Bit-packed inference export (`pack_model`, `uv run lb-mem-bench`)
+
+`littlebit_scratch.packed.pack_model(model)` swaps each `LittleBitLinear` for a `PackedLittleBitLinear`:
+signs stored 1 bit each (uint8, 8 per byte), `h, g, l` in FP16, FP32 latents dropped. The forward unpacks
+128 rank columns at a time through a 256-entry lookup table, folds the scales into that small chunk, and
+accumulates into the output in place, so no full-size FP matrix is ever built.
+`PackedLittleBitLinear.empty(...)` + `load_state_dict` loads a packed checkpoint without ever allocating latents.
+
+CPU, 1 thread, each case in its own process (`results/mem_bench_cpu.json`). "Extra peak RAM" is the
+high-water RSS above the pre-forward level during the timed forwards.
+
+| case | weights in RAM | on disk | small input: time / extra peak RAM | large input: time / extra peak RAM |
+|---|---|---|---|---|
+| TinyLM, FP32 baseline | 1,610 KiB | 1,618 KiB | 0.32 ms / 0.1 MiB (1 token) | 23.67 ms / 23.1 MiB (batch 32x64) |
+| TinyLM, LittleBit 1.41 bpw, training format + FP32 cache | 3,067 KiB | 1,648 KiB | 0.35 ms / 0.1 MiB (1 token) | 25.16 ms / 14.5 MiB (batch 32x64) |
+| TinyLM, LittleBit 1.41 bpw, **packed** | 137 KiB | 160 KiB | 2.07 ms / 0.4 MiB (1 token) | 29.98 ms / 22.0 MiB (batch 32x64) |
+| 4096×4096, FP32 nn.Linear | 65,536 KiB | 65,538 KiB | 2.69 ms / 1.8 MiB (1 token) | 395.31 ms / 38.5 MiB (2048 tokens) |
+| 4096×4096, LittleBit 1.0 bpw, training format + FP32 cache | 128,840 KiB | 64,459 KiB | 2.76 ms / 0.0 MiB (1 token) | 385.89 ms / 73.7 MiB (2048 tokens) |
+| 4096×4096, LittleBit 1.0 bpw, **packed** | 2,052 KiB | 2,054 KiB | 36.41 ms / 16.3 MiB (1 token) | 475.13 ms / 49.6 MiB (2048 tokens) |
+| 4096×4096, LittleBit 0.55 bpw, **packed** | 1,138 KiB | 1,141 KiB | 15.92 ms / 17.0 MiB (1 token) | 223.21 ms / 49.4 MiB (2048 tokens) |
+| 4096×4096, LittleBit 0.1 bpw, **packed** | 208 KiB | 211 KiB | 3.10 ms / 9.7 MiB (1 token) | 56.86 ms / 41.6 MiB (2048 tokens) |
+
+Packing gives the memory the bpw numbers promise (4096×4096 at 1 bpw: 64 MiB FP32 → 2 MiB, 32× less;
+whole TinyLM 1.6 MiB → 0.13 MiB). The cost is speed without a fused kernel: every call unpacks all the signs,
+so single-token decode is ~13× slower than dense at 1 bpw and ~1.2× slower at 0.1 bpw; with many tokens the
+unpack amortizes (0.55 bpw: 1.8× faster, 0.1 bpw: 7× faster than dense for 2,048 tokens). A real kernel
+would unpack in registers and turn the 32× smaller weight reads into decode speed.
+
 ## Layout
 
 - `src/littlebit_scratch/littlebit.py`: `LittleBitLinear`, STEs, bpw accounting
@@ -276,6 +304,8 @@ RAM for the factors is rank·(in+out)·4 bytes, not the packed size in the table
 - `src/littlebit_scratch/train.py`: training loop / `lb-train` CLI
 - `src/littlebit_scratch/optim.py`: DeepSeek-V4-style Muon (hybrid Newton-Schulz)
 - `src/littlebit_scratch/infer_bench.py`: `lb-infer-bench`, inference speed vs nn.Linear
+- `src/littlebit_scratch/packed.py`: bit-packed inference export
+- `src/littlebit_scratch/mem_bench.py`: `lb-mem-bench`, inference memory/speed of FP vs cached vs packed
 - `src/littlebit_scratch/bench.py`: `lb-bench`, FP vs LittleBit size/loss/time/memory comparison
 - `results/`: logs from the comparison runs above
 - `tests/`: layer math, STE gradients, bpw budget, causality, SVD/ITQ init, and from-scratch training smoke tests

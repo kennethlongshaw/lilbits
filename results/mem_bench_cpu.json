@@ -1,0 +1,74 @@
+[
+  {
+    "case": "model-fp",
+    "weights_mib": 1.57275390625,
+    "disk_mib": 1.5801095962524414,
+    "batch 32x64 ms": 23.67289520000213,
+    "batch 32x64 peak_extra_mib": 23.05078125,
+    "1 token ms": 0.31683599999610124,
+    "1 token peak_extra_mib": 0.0625
+  },
+  {
+    "case": "model-cached:1.41",
+    "weights_mib": 2.99468994140625,
+    "disk_mib": 1.6092138290405273,
+    "batch 32x64 ms": 25.16013879999832,
+    "batch 32x64 peak_extra_mib": 14.484375,
+    "1 token ms": 0.3454296000029444,
+    "1 token peak_extra_mib": 0.0625
+  },
+  {
+    "case": "model-packed:1.41",
+    "weights_mib": 0.133514404296875,
+    "disk_mib": 0.15618228912353516,
+    "batch 32x64 ms": 29.982777499998292,
+    "batch 32x64 peak_extra_mib": 22.03515625,
+    "1 token ms": 2.0651417000010497,
+    "1 token peak_extra_mib": 0.3515625
+  },
+  {
+    "case": "layer-4096x4096-fp",
+    "weights_mib": 64.0,
+    "disk_mib": 64.00156497955322,
+    "1 token ms": 2.6891129999967234,
+    "1 token peak_extra_mib": 1.8359375,
+    "2048 tokens ms": 395.31338239999627,
+    "2048 tokens peak_extra_mib": 38.48046875
+  },
+  {
+    "case": "layer-4096x4096-cached:1.0",
+    "weights_mib": 125.82017517089844,
+    "disk_mib": 62.94849109649658,
+    "1 token ms": 2.7625828999987334,
+    "1 token peak_extra_mib": 0.01953125,
+    "2048 tokens ms": 385.8912018000012,
+    "2048 tokens peak_extra_mib": 73.69921875
+  },
+  {
+    "case": "layer-4096x4096-packed:1.0",
+    "weights_mib": 2.0038375854492188,
+    "disk_mib": 2.00612735748291,
+    "1 token ms": 36.40820910000002,
+    "1 token peak_extra_mib": 16.27734375,
+    "2048 tokens ms": 475.1342684000008,
+    "2048 tokens peak_extra_mib": 49.578125
+  },
+  {
+    "case": "layer-4096x4096-packed:0.55",
+    "weights_mib": 1.1114578247070312,
+    "disk_mib": 1.1137933731079102,
+    "1 token ms": 15.923687299999756,
+    "1 token peak_extra_mib": 17.046875,
+    "2048 tokens ms": 223.20934299999635,
+    "2048 tokens peak_extra_mib": 49.3828125
+  },
+  {
+    "case": "layer-4096x4096-packed:0.1",
+    "weights_mib": 0.20345306396484375,
+    "disk_mib": 0.20577335357666016,
+    "1 token ms": 3.1033793999995396,
+    "1 token peak_extra_mib": 9.72265625,
+    "2048 tokens ms": 56.86258529999577,
+    "2048 tokens peak_extra_mib": 41.6328125
+  }
+]
