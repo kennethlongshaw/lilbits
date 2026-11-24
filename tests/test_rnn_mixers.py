@@ -4,10 +4,10 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from littlebit_scratch.data import MarkovSource
-from littlebit_scratch.mixers import MIXERS, gated_linear_rule, mingru_rule, mlstm_rule
-from littlebit_scratch.model import Config, TinyLM, TransformerBlock, make_linear_factory
-from littlebit_scratch.train import TrainConfig, make_optimizers, train
+from lilbits.data import MarkovSource
+from lilbits.mixers.recurrent import MIXERS, gated_linear_rule, mingru_rule, mlstm_rule
+from lilbits.models.tinylm import Config, TinyLM, TransformerBlock, make_linear_factory
+from lilbits.training.train import TrainConfig, make_optimizers, train
 
 NEW = ["mamba2", "gla", "mlstm", "mingru"]
 

@@ -3,10 +3,10 @@ import math
 import pytest
 import torch
 
-from littlebit_scratch.data import MarkovSource
-from littlebit_scratch.littlebit import LittleBitLinear
-from littlebit_scratch.model import Config, TinyLM, TransformerBlock, compression_report, make_linear_factory
-from littlebit_scratch.train import TrainConfig, train
+from lilbits.data import MarkovSource
+from lilbits.layers.littlebit import LittleBitLinear
+from lilbits.models.tinylm import Config, TinyLM, TransformerBlock, compression_report, make_linear_factory
+from lilbits.training.train import TrainConfig, train
 
 TINY = dict(vocab_size=16, seq_len=16, d_model=32, n_heads=2, n_layers=1)
 
@@ -58,7 +58,7 @@ def test_training_from_scratch_learns(linear):
 
 
 def test_muon_gets_2d_block_matrices_only():
-    from littlebit_scratch.train import make_optimizers
+    from lilbits.training.train import make_optimizers
 
     model = TinyLM(Config(vocab_size=16, seq_len=16, d_model=64, n_heads=2, n_layers=1, linear="littlebit", bpw=4.0))
     muon, adam = make_optimizers(model, TrainConfig(lr=1e-3, optim="muon"))

@@ -16,8 +16,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .mixers import MIXERS
-from .model import SwiGLU
+from lilbits.mixers.recurrent import MIXERS
+from lilbits.layers.ffn import SwiGLU
 
 
 class StatefulBlock(nn.Module):

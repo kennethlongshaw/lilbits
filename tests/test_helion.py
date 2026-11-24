@@ -13,7 +13,7 @@ pytest.importorskip("helion")
 
 
 def test_triton_codegen_all_configs():
-    from littlebit_scratch import helion_kernels as hk
+    from lilbits.inference import helion_kernels as hk
 
     m, k, n, r = 1, 512, 768, 100
     nb = (r + 7) // 8
@@ -33,7 +33,7 @@ def test_triton_codegen_all_configs():
 
 
 def test_l_planes_layout():
-    from littlebit_scratch.helion_kernels import l_planes
+    from lilbits.inference.helion_kernels import l_planes
 
     l = torch.arange(1, 12, dtype=torch.float32)  # r = 11 -> nb = 2
     l8 = l_planes(l, 2)
@@ -44,9 +44,9 @@ def test_l_planes_layout():
 def test_helion_matches_torch_backend_in_ref_mode():
     code = textwrap.dedent("""
         import torch
-        from littlebit_scratch.littlebit import LittleBitLinear
-        from littlebit_scratch.model import Config, TinyLM
-        from littlebit_scratch.packed import PackedLittleBitLinear, pack_model, set_backend
+        from lilbits.layers.littlebit import LittleBitLinear
+        from lilbits.models.tinylm import Config, TinyLM
+        from lilbits.inference.packed import PackedLittleBitLinear, pack_model, set_backend
         torch.manual_seed(0)
         for i, o, r, res, m in [(48, 32, 13, True, 5), (64, 40, 16, False, 1), (40, 72, 21, True, 3)]:
             layer = LittleBitLinear(i, o, rank=r, residual=res, bias=True)

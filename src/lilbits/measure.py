@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 import torch
 from torch import nn
 
-from .bitnet import BitLinear
-from .littlebit import LittleBitLinear
+from lilbits.layers.bitnet import BitLinear
+from lilbits.layers.littlebit import LittleBitLinear
 
 
 def _rss_mib() -> float:

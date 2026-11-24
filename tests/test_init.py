@@ -1,9 +1,9 @@
 import torch
 
-from littlebit_scratch.data import MarkovSource
-from littlebit_scratch.littlebit import LittleBitLinear, joint_itq, zero_margin
-from littlebit_scratch.model import Config, TinyLM, convert_fp_to_littlebit
-from littlebit_scratch.train import TrainConfig, train
+from lilbits.data import MarkovSource
+from lilbits.layers.littlebit import LittleBitLinear, joint_itq, zero_margin
+from lilbits.models.tinylm import Config, TinyLM, convert_fp_to_littlebit
+from lilbits.training.train import TrainConfig, train
 
 
 def _factors(seed=0, out=96, inp=64, r=16):

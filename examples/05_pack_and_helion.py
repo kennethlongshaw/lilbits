@@ -17,11 +17,11 @@ import time
 import torch
 import torch.nn.functional as F
 
-from littlebit_scratch.data import MarkovSource
-from littlebit_scratch.measure import Meter, size_report
-from littlebit_scratch.model import Config
-from littlebit_scratch.packed import model_bytes, pack_model, set_backend
-from littlebit_scratch.train import TrainConfig, train
+from lilbits.data import MarkovSource
+from lilbits.measure import Meter, size_report
+from lilbits.models.tinylm import Config
+from lilbits.inference.packed import model_bytes, pack_model, set_backend
+from lilbits.training.train import TrainConfig, train
 
 
 @torch.no_grad()

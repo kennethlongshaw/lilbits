@@ -16,8 +16,8 @@ import time
 import torch
 from torch import nn
 
-from littlebit_scratch.littlebit import LittleBitLinear
-from littlebit_scratch.packed import PackedLittleBitLinear
+from lilbits.layers.littlebit import LittleBitLinear
+from lilbits.inference.packed import PackedLittleBitLinear
 
 
 def _time(fn, device, reps):

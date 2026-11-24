@@ -9,12 +9,12 @@ import json
 
 import torch
 
-from littlebit_scratch.bitnet import pack_bitnet
-from littlebit_scratch.measure import Meter, size_report, state_dict_bytes
-from littlebit_scratch.data import MarkovSource
-from littlebit_scratch.model import Config
-from littlebit_scratch.packed import model_bytes, pack_model
-from littlebit_scratch.train import TrainConfig, evaluate, train
+from lilbits.layers.bitnet import pack_bitnet
+from lilbits.measure import Meter, size_report, state_dict_bytes
+from lilbits.data import MarkovSource
+from lilbits.models.tinylm import Config
+from lilbits.inference.packed import model_bytes, pack_model
+from lilbits.training.train import TrainConfig, evaluate, train
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--linear", default="littlebit", choices=["fp", "littlebit", "bitnet"])

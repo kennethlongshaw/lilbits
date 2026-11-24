@@ -21,10 +21,10 @@ from concurrent.futures import ProcessPoolExecutor
 
 import torch
 
-from littlebit_scratch.measure import size_report
-from littlebit_scratch.data import MarkovSource
-from littlebit_scratch.model import Config
-from littlebit_scratch.train import TrainConfig, train
+from lilbits.measure import size_report
+from lilbits.data import MarkovSource
+from lilbits.models.tinylm import Config
+from lilbits.training.train import TrainConfig, train
 
 # Optuna winners from results/optuna (tuned at d_model 128, LittleBit at 1.41 bpw)
 LB_TUNED = dict(lr=0.017513239557445673, weight_decay=0.01, warmup=100, optim="muon_ds",

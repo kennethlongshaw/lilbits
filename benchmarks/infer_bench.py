@@ -12,8 +12,8 @@ import time
 import torch
 from torch import nn
 
-from littlebit_scratch.littlebit import LittleBitLinear
-from littlebit_scratch.model import Config, TinyLM
+from lilbits.layers.littlebit import LittleBitLinear
+from lilbits.models.tinylm import Config, TinyLM
 
 
 def _time(fn, device: str, reps: int) -> float:

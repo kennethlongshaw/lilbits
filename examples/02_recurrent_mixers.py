@@ -9,8 +9,8 @@ to continue a sequence; see 03_state_rollback.py for carrying state through a re
 
 import torch
 
-from littlebit_scratch.mixers import MIXERS
-from littlebit_scratch.model import Config, make_linear_factory
+from lilbits.mixers.recurrent import MIXERS
+from lilbits.models.tinylm import Config, make_linear_factory
 
 
 def state_numel(s):

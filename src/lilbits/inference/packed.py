@@ -20,7 +20,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .littlebit import LittleBitLinear, _sign
+from lilbits.layers.littlebit import LittleBitLinear, _sign
 
 _SHIFTS = torch.arange(8, dtype=torch.uint8)
 
@@ -95,13 +95,13 @@ class PackedLittleBitLinear(nn.Module):
         cache = self.__dict__.setdefault("_l8_cache", {})
         key = (i, self.l.device)
         if key not in cache:
-            from .helion_kernels import l_planes
+            from lilbits.inference.helion_kernels import l_planes
             cache[key] = l_planes(self.l[i], nb)
         return cache[key]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.backend == "helion":
-            from .helion_kernels import packed_forward
+            from lilbits.inference.helion_kernels import packed_forward
             return packed_forward(self, x)
         # Scales are folded into each small unpacked chunk (never into activations), and the
         # output accumulates in place, so the only activation-sized tensor is y itself.

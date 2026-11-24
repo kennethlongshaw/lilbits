@@ -1,6 +1,6 @@
 """Speculative-decoding style state handling on a recurrent rule: snapshot, try k draft tokens, roll back.
 
-The gated delta rule (and every recurrence in `mixers.py`) maps (state, tokens) -> (outputs, state), so
+The gated delta rule (and every recurrence in `mixers/recurrent.py`) maps (state, tokens) -> (outputs, state), so
 verifying k drafts is one call from a snapshot, and rejecting drafts j.. means recomputing from the snapshot
 over the accepted prefix only. This shows that the accepted-prefix state equals the state a model that never
 saw the rejected drafts would have.
@@ -11,7 +11,7 @@ saw the rejected drafts would have.
 import torch
 import torch.nn.functional as F
 
-from littlebit_scratch.mixers import gated_delta_rule
+from lilbits.mixers.recurrent import gated_delta_rule
 
 torch.manual_seed(0)
 B, H, D = 1, 2, 8

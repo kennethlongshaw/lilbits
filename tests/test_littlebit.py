@@ -3,7 +3,7 @@ import math
 import pytest
 import torch
 
-from littlebit_scratch.littlebit import (
+from lilbits.layers.littlebit import (
     LittleBitLinear,
     binarize,
     bits_per_weight,

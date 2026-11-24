@@ -197,7 +197,7 @@ FP16 baseline on seed 0: 0.984 default, 0.978 tuned.
 linear-attention mixer in the Qwen3-Next / Qwen3.8-Flash-Next hybrids. LittleBit compresses its five
 d×d projections (q, k, v, output gate, o). The per-head decay/beta projections, short convs, `A_log` and
 `dt_bias` stay full precision; `--model.lb_gates true` binarizes the decay/beta projections too. The
-recurrence is a naive per-token loop (`mixers.gated_delta_rule`): exact, but ~4.5× slower than softmax on CPU.
+recurrence is a naive per-token loop (`lilbits.mixers.recurrent.gated_delta_rule`): exact, but ~4.5× slower than softmax on CPU.
 
 Seed 0, default settings (AdamW; LittleBit = 300-step FP warm start + SVD+ITQ, `--model.bpw 1.41`),
 1,500 steps, entropy floor 0.895. Logs and JSON in `results/gdn/`.
@@ -220,10 +220,10 @@ and lists what is still missing. Runnable demos are in `examples/`.
 
 | kind | options (`--model.*` / `--linear`) | file |
 |---|---|---|
-| linear | `fp`, `littlebit` (any bpw, 1 or 2 paths), `bitnet` (b1.58, 8-bit activations) | `littlebit.py`, `bitnet.py` |
-| token mixer | `softmax`, `gdn` (Gated DeltaNet), `mamba2` (SSD), `gla` (GLA / RWKV-6 style), `mlstm` (xLSTM), `mingru` | `model.py`, `mixers.py` |
-| packing | 1-bit signs + FP16 scales (LittleBit), 2-bit ternary codes (BitNet), Helion kernels | `packed.py`, `bitnet.py`, `helion_kernels.py` |
-| optimizer | AdamW, torch Muon, DeepSeek-style Muon | `optim.py`, `train.py` |
+| linear | `fp`, `littlebit` (any bpw, 1 or 2 paths), `bitnet` (b1.58, 8-bit activations) | `layers/littlebit.py`, `layers/bitnet.py` |
+| token mixer | `softmax`, `gdn` (Gated DeltaNet), `mamba2` (SSD), `gla` (GLA / RWKV-6 style), `mlstm` (xLSTM), `mingru` | `models/tinylm.py`, `mixers/recurrent.py` |
+| packing | 1-bit signs + FP16 scales (LittleBit), 2-bit ternary codes (BitNet), Helion kernels | `inference/packed.py`, `layers/bitnet.py`, `inference/helion_kernels.py` |
+| optimizer | AdamW, torch Muon, DeepSeek-style Muon | `training/optim.py`, `train.py` |
 
 Every recurrent mixer is a plain per-token loop with `initial_state` in and the final state out, so state
 can be carried, snapshotted and rolled back (`examples/03_state_rollback.py`). The loops are exact references,
@@ -332,7 +332,7 @@ helps most; the Optuna sweep later preferred an even longer one (600 steps, the 
   latents), `adjust_lr_fn="match_rms_adamw"` so AdamW lrs carry over; embeddings, LM head, LittleBit scales and
   norms stay on AdamW (`--train.muon_embed true` moves embeddings/head too). `--train.muon_ns_steps` sets the
   Newton-Schulz steps.
-- `muon_ds`: DeepSeek-V4's recipe (`src/littlebit_scratch/optim.py`): 10 Newton-Schulz steps (8 fast,
+- `muon_ds`: DeepSeek-V4's recipe (`src/lilbits/training/optim.py`): 10 Newton-Schulz steps (8 fast,
   2 with (2, -1.5, 0.5) to pin singular values at 1), update RMS 0.18, Nesterov 0.95.
 - `--model.qk_norm true`: RMSNorm on per-head queries/keys (DeepSeek's replacement for QK-Clip).
 
@@ -404,7 +404,7 @@ The cache holds FP32 factors, so inference RAM is rank·(in+out)·4 bytes: no me
 
 ### Bit-packed export (`pack_model`, `uv run python benchmarks/mem_bench.py`)
 
-`littlebit_scratch.packed.pack_model(model)` swaps each `LittleBitLinear` for a `PackedLittleBitLinear`:
+`lilbits.inference.packed.pack_model(model)` swaps each `LittleBitLinear` for a `PackedLittleBitLinear`:
 signs stored 1 bit each (uint8, 8 per byte), `h, g, l` in FP16, FP32 latents dropped. The forward unpacks
 128 rank columns at a time through a 256-entry lookup table, folds the scales into that chunk, and accumulates
 into the output in place, so no full-size FP matrix is ever built. `PackedLittleBitLinear.empty(...)` +
@@ -431,7 +431,7 @@ than dense at 1 bpw and about even at 0.1 bpw; with many tokens the unpack amort
 
 ### Helion kernel (`backend="helion"`, `uv run python benchmarks/gpu_bench.py`)
 
-`src/littlebit_scratch/helion_kernels.py` has two [Helion](https://pytorch.org/blog/helion/) kernels that run a
+`src/lilbits/inference/helion_kernels.py` has two [Helion](https://pytorch.org/blog/helion/) kernels that run a
 packed layer straight from the 1-bit storage, unpacking bits inside each tile:
 
 - `littlebit_down`: `zp[j, m, b] = l[8b+j] · Σ_k (x·g)[m, k] · sign_bit_j(Vb[k, b])`
@@ -470,18 +470,18 @@ residual paths.
 
 The repo has three layers:
 
-- **`src/littlebit_scratch/`** holds the model primitives plus training and inference integration. Nothing in it is a one-off script.
-  - `littlebit.py`: `LittleBitLinear`, STEs, bpw accounting, SVD/ITQ init
-  - `bitnet.py`: BitNet b1.58 `BitLinear`, its inference cache, and 2-bit `PackedBitLinear`
-  - `mixers.py`: Gated DeltaNet, Mamba2, GLA, mLSTM and minGRU, each with state in and state out
-  - `model.py`: attention, SwiGLU, `TransformerBlock`, `TinyLM`, FP → LittleBit conversion
-  - `decision.py`: decision-model parts: `StatefulBlock`, state fork and clone, `TypedReadout`, CRPS, ECE, Brier
-  - `packed.py`, `helion_kernels.py`: 1-bit packed LittleBit inference with torch and Helion backends
-  - `optim.py`: DeepSeek-V4-style Muon
-  - `train.py`: Lightning Fabric loop, `TrainConfig`, and the `lb-train` CLI
-  - `tune.py`: `lb-tune`, the Optuna sweep
+- **`src/lilbits/`** holds the primitives plus training and inference integration. Nothing in it is a one-off script.
+  - `layers/`: `littlebit.py` (`LittleBitLinear`, STEs, bpw accounting, SVD/ITQ init), `bitnet.py` (`BitLinear`
+    b1.58, inference cache, 2-bit `PackedBitLinear`), `ffn.py` (`SwiGLU`)
+  - `mixers/`: `attention.py` (causal softmax, optional QK-norm), `recurrent.py` (Gated DeltaNet, Mamba2, GLA,
+    mLSTM, minGRU, each with state in and state out)
+  - `models/`: `tinylm.py` (`Config`, linear / mixer factories, `TransformerBlock`, `TinyLM`, FP → LittleBit
+    conversion), `decision.py` (`StatefulBlock`, state fork and clone, `TypedReadout`, CRPS, ECE, Brier)
+  - `inference/`: `packed.py` (1-bit packed LittleBit), `helion_kernels.py`
+  - `training/`: `train.py` (Fabric loop, `TrainConfig`, `lb-train` CLI), `optim.py` (DeepSeek-style Muon),
+    `tune.py` (`lb-tune`, Optuna)
   - `data.py`: Markov source with a known entropy floor, and a char-level text source
-  - `measure.py`: `Meter` (wall, CPU and peak RSS for any block of code), `size_report`, `state_dict_bytes`
+  - `measure.py`: `Meter` (wall, CPU and peak RSS for any code block), `size_report`, `state_dict_bytes`
 - **`examples/`** shows how to use the primitives. Each one defaults to a short smoke run and prints a `METRICS` line (see `examples/README.md`).
 - **`benchmarks/`** runs examples, or the same primitives side by side. Every benchmark reports quality, stored size, RAM, peak RSS, and CPU and wall time for both training and inference.
   - `examples_bench.py`: every example in its own process, with per-process rusage plus the example's own metrics

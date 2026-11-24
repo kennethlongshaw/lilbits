@@ -2,8 +2,8 @@ import math
 
 import torch
 
-from littlebit_scratch.bitnet import BitLinear, act_quant, ternary
-from littlebit_scratch.model import Config, TinyLM, compression_report
+from lilbits.layers.bitnet import BitLinear, act_quant, ternary
+from lilbits.models.tinylm import Config, TinyLM, compression_report
 
 
 def test_ternary_values_and_scale():
@@ -46,7 +46,7 @@ def test_tinylm_bitnet_trains_one_step():
 
 
 def test_eval_cache_and_packed_match_training_forward():
-    from littlebit_scratch.bitnet import PackedBitLinear
+    from lilbits.layers.bitnet import PackedBitLinear
 
     torch.manual_seed(0)
     m = BitLinear(37, 11)

@@ -15,9 +15,11 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .bitnet import BitLinear
-from .littlebit import LittleBitLinear
-from .mixers import MIXERS, GatedDeltaNet
+from lilbits.layers.bitnet import BitLinear
+from lilbits.layers.littlebit import LittleBitLinear
+from lilbits.mixers.recurrent import MIXERS, GatedDeltaNet
+from lilbits.layers.ffn import SwiGLU
+from lilbits.mixers.attention import Attention
 
 
 @dataclass
@@ -64,42 +66,6 @@ def make_linear_factory(cfg: Config) -> LinearFactory:
     if cfg.linear == "bitnet":
         return BitLinear
     raise ValueError(f"unknown linear {cfg.linear!r}")
-
-
-class Attention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, linear: LinearFactory, qk_norm: bool = False):
-        super().__init__()
-        assert d_model % n_heads == 0
-        self.n_heads = n_heads
-        # DeepSeek-V4-style: RMSNorm on per-head queries and keys keeps attention logits bounded
-        self.q_norm = nn.RMSNorm(d_model // n_heads) if qk_norm else nn.Identity()
-        self.k_norm = nn.RMSNorm(d_model // n_heads) if qk_norm else nn.Identity()
-        self.q = linear(d_model, d_model)
-        self.k = linear(d_model, d_model)
-        self.v = linear(d_model, d_model)
-        self.o = linear(d_model, d_model)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, C = x.shape
-        H = self.n_heads
-
-        def heads(t: torch.Tensor) -> torch.Tensor:
-            return t.view(B, T, H, C // H).transpose(1, 2)
-
-        q, k = self.q_norm(heads(self.q(x))), self.k_norm(heads(self.k(x)))
-        y = F.scaled_dot_product_attention(q, k, heads(self.v(x)), is_causal=True)
-        return self.o(y.transpose(1, 2).reshape(B, T, C))
-
-
-class SwiGLU(nn.Module):
-    def __init__(self, d_model: int, hidden: int, linear: LinearFactory):
-        super().__init__()
-        self.gate = linear(d_model, hidden)
-        self.up = linear(d_model, hidden)
-        self.down = linear(hidden, d_model)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.down(F.silu(self.gate(x)) * self.up(x))
 
 
 def make_mixer(d_model: int, n_heads: int, linear: LinearFactory, mixer: str = "softmax", qk_norm: bool = False,

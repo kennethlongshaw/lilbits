@@ -22,15 +22,15 @@ import time
 
 import torch
 
-from littlebit_scratch.measure import size_report
-from littlebit_scratch.bitnet import BitLinear, pack_bitnet
-from littlebit_scratch.data import MarkovSource
+from lilbits.measure import size_report
+from lilbits.layers.bitnet import BitLinear, pack_bitnet
+from lilbits.data import MarkovSource
 from frontier import best_grid, key, load
 from frontier import main_specs as frontier_specs
-from littlebit_scratch.littlebit import LittleBitLinear
-from littlebit_scratch.model import Config
-from littlebit_scratch.packed import model_bytes, pack_model
-from littlebit_scratch.train import TrainConfig, param_groups, train
+from lilbits.layers.littlebit import LittleBitLinear
+from lilbits.models.tinylm import Config
+from lilbits.inference.packed import model_bytes, pack_model
+from lilbits.training.train import TrainConfig, param_groups, train
 
 TARGET = 1.10  # "steps to reach eval loss <= TARGET" learning-curve stat
 

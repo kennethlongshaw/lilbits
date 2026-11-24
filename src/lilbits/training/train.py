@@ -21,10 +21,10 @@ import torch
 import torch.nn.functional as F
 from lightning.fabric import Fabric
 
-from .data import MarkovSource, TextSource
-from .littlebit import LittleBitLinear, zero_margin
-from .model import Config, TinyLM, compression_report, convert_fp_to_littlebit
-from .optim import DeepSeekMuon
+from lilbits.data import MarkovSource, TextSource
+from lilbits.layers.littlebit import LittleBitLinear, zero_margin
+from lilbits.models.tinylm import Config, TinyLM, compression_report, convert_fp_to_littlebit
+from lilbits.training.optim import DeepSeekMuon
 
 
 @dataclass

@@ -39,10 +39,10 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from littlebit_scratch.decision import StatefulBlock, TypedReadout, brier, clone_states, crps, ece, fork_states, ordinal_stats
-from littlebit_scratch.measure import Meter, size_report, state_dict_bytes
-from littlebit_scratch.model import Config, make_linear_factory
-from littlebit_scratch.train import TrainConfig, make_optimizers
+from lilbits.models.decision import StatefulBlock, TypedReadout, brier, clone_states, crps, ece, fork_states, ordinal_stats
+from lilbits.measure import Meter, size_report, state_dict_bytes
+from lilbits.models.tinylm import Config, make_linear_factory
+from lilbits.training.train import TrainConfig, make_optimizers
 
 # ---- vocabulary -------------------------------------------------------------------------------
 N_KEYS = N_VALS = 16

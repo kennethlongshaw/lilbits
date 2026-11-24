@@ -22,9 +22,9 @@ import torch
 from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend
 
-from .data import MarkovSource
-from .model import Config
-from .train import TrainConfig, train
+from lilbits.data import MarkovSource
+from lilbits.models.tinylm import Config
+from lilbits.training.train import TrainConfig, train
 
 
 def suggest(trial: optuna.Trial, linear: str) -> tuple[dict, dict]:
@@ -106,7 +106,7 @@ def main(argv=None):
             study.enqueue_trial(default)
         per = -(-args.trials // args.workers)
         base = [a for a in (argv if argv is not None else sys.argv[1:])]
-        procs = [subprocess.Popen([sys.executable, "-m", "littlebit_scratch.tune", *base, "--study", args.study,
+        procs = [subprocess.Popen([sys.executable, "-m", "lilbits.training.tune", *base, "--study", args.study,
                                    "--worker-id", str(w), "--trials-per-worker", str(per)])
                  for w in range(args.workers)]
         for p in procs:

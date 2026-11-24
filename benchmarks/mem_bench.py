@@ -19,9 +19,9 @@ import time
 import torch
 from torch import nn
 
-from littlebit_scratch.littlebit import LittleBitLinear
-from littlebit_scratch.model import Config, TinyLM
-from littlebit_scratch.packed import model_bytes, pack_model
+from lilbits.layers.littlebit import LittleBitLinear
+from lilbits.models.tinylm import Config, TinyLM
+from lilbits.inference.packed import model_bytes, pack_model
 
 
 def _trim():
@@ -71,7 +71,7 @@ def build(case: str):
     if variant == "packed":
         pack_model(m) if not isinstance(m, LittleBitLinear) else None
         if isinstance(m, LittleBitLinear):
-            from littlebit_scratch.packed import PackedLittleBitLinear
+            from lilbits.inference.packed import PackedLittleBitLinear
             m = PackedLittleBitLinear(m)
     elif variant == "cached":
         with torch.no_grad():

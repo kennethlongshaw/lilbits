@@ -3,10 +3,10 @@ import math
 import pytest
 import torch
 
-from littlebit_scratch.data import MarkovSource
-from littlebit_scratch.model import Config, TinyLM
-from littlebit_scratch.optim import DeepSeekMuon, hybrid_newton_schulz
-from littlebit_scratch.train import TrainConfig, make_optimizers, train
+from lilbits.data import MarkovSource
+from lilbits.models.tinylm import Config, TinyLM
+from lilbits.training.optim import DeepSeekMuon, hybrid_newton_schulz
+from lilbits.training.train import TrainConfig, make_optimizers, train
 
 
 @pytest.mark.parametrize("shape", [(64, 64), (96, 32), (32, 96)])

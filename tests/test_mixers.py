@@ -4,11 +4,11 @@ import pytest
 import torch
 from torch import nn
 
-from littlebit_scratch.data import MarkovSource
-from littlebit_scratch.littlebit import LittleBitLinear
-from littlebit_scratch.mixers import GatedDeltaNet, gated_delta_rule
-from littlebit_scratch.model import Config, TinyLM, TransformerBlock, convert_fp_to_littlebit, make_linear_factory
-from littlebit_scratch.train import TrainConfig, make_optimizers, train
+from lilbits.data import MarkovSource
+from lilbits.layers.littlebit import LittleBitLinear
+from lilbits.mixers.recurrent import GatedDeltaNet, gated_delta_rule
+from lilbits.models.tinylm import Config, TinyLM, TransformerBlock, convert_fp_to_littlebit, make_linear_factory
+from lilbits.training.train import TrainConfig, make_optimizers, train
 
 TINY = dict(vocab_size=16, seq_len=16, d_model=32, n_heads=2, n_layers=1, mixer="gdn")
 

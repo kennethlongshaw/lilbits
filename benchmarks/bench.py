@@ -18,12 +18,12 @@ import time
 
 import torch
 
-from littlebit_scratch.data import MarkovSource
-from littlebit_scratch.bitnet import BitLinear
-from littlebit_scratch.littlebit import LittleBitLinear
-from littlebit_scratch.measure import size_report
-from littlebit_scratch.model import Config, TinyLM
-from littlebit_scratch.train import TrainConfig, train
+from lilbits.data import MarkovSource
+from lilbits.layers.bitnet import BitLinear
+from lilbits.layers.littlebit import LittleBitLinear
+from lilbits.measure import size_report
+from lilbits.models.tinylm import Config, TinyLM
+from lilbits.training.train import TrainConfig, train
 
 CONFIGS = {
     "fp": dict(linear="fp", optim="adamw", fp_warmup=0, init="small", itq_iters=0,
@@ -77,7 +77,7 @@ def run_one(spec: str, args) -> dict:
     model = res["model"].eval()
     sizes = size_report(model)
     # AdamW keeps exp_avg + exp_avg_sq (2x params); Muon keeps one momentum buffer for its 2D block matrices
-    from littlebit_scratch.train import param_groups
+    from lilbits.training.train import param_groups
     groups = param_groups(model, 1.0, 1.0, 0.0)
     muon_bytes = sum(_bytes(g["params"]) for g in groups if g["name"] in ("hidden", "latent"))
     opt_state_bytes = (2 * sizes["train_param_bytes"] if o["optim"] == "adamw"
