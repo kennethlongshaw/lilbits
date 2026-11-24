@@ -123,7 +123,7 @@ Muon doesn't beat AdamW at this size. It does tolerate the full latent learning 
 (1.251, its best LittleBit result without SVD init), but with the SVD/ITQ inits the bigger latent steps undo the
 rotation's work: near-zero latents climb from 3% back to ~10%.
 
-### Weight decay 0.1 (now the CLI default)
+### Weight decay 0.1 (default is 0)
 
 Same runs with `--weight-decay 0.1` (previous tables used 0). Decay applies to the 2D weights and LittleBit
 latents; scales and norms are never decayed.
@@ -138,7 +138,7 @@ latents; scales and norms are never decayed.
 ## Baseline vs LittleBit on the same data (`uv run lb-bench`)
 
 All three train on the identical Markov token stream (same seed), d_model 128, 2 blocks, batch 32 × seq 64,
-AdamW, weight decay 0.1, 1 CPU thread each. Saved as `results/bench_d128.json`. This table was measured
+AdamW, weight decay 0.1 (`--weight-decay 0.1`; default is now 0), 1 CPU thread each. Saved as `results/bench_d128.json`. This table was measured
 *before* the fused forward (below), so its LittleBit wall time, peak memory and inference time are the old, slower ones.
 
 | metric | FP16 baseline | LittleBit ~1 bpw, SVD+ITQ init (pure from scratch) | LittleBit ~1 bpw, 300-step FP warm start + SVD+ITQ |

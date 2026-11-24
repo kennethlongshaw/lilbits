@@ -83,7 +83,7 @@ def run_one(key: str, args) -> dict:
         torch.cuda.reset_peak_memory_stats()
     t0 = time.perf_counter()
     res = train(cfg, source, args.steps, args.batch, args.lr, args.device, log_every=args.steps,
-                weight_decay=0.1, latent_lr_mult=0.1, eval_batches=eval_batches, seed=args.seed,
+                weight_decay=args.weight_decay, latent_lr_mult=0.1, eval_batches=eval_batches, seed=args.seed,
                 verbose=False, fp_warmup=c["fp_warmup"], optim=c["optim"])
     wall = time.perf_counter() - t0
     train_peak = (torch.cuda.max_memory_allocated() / 2**20 if args.device.startswith("cuda")
@@ -151,6 +151,7 @@ def main(argv=None):
     ap.add_argument("--vocab", type=int, default=32)
     ap.add_argument("--bpw", type=float, default=1.0)
     ap.add_argument("--lr", type=float, default=3e-3)
+    ap.add_argument("--weight-decay", type=float, default=0.0)
     ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--parallel", action="store_true", help="run configs concurrently (CPU only)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")

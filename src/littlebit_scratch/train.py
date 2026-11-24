@@ -204,7 +204,7 @@ def main(argv=None):
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--scale-lr-mult", type=float, default=1.0)
     ap.add_argument("--latent-lr-mult", type=float, default=0.1)
-    ap.add_argument("--weight-decay", type=float, default=0.1)
+    ap.add_argument("--weight-decay", type=float, default=0.0)
     ap.add_argument("--text", help="char-level text file instead of the synthetic Markov source")
     ap.add_argument("--vocab", type=int, default=32)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
