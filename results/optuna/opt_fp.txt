@@ -1,0 +1,11 @@
+
+study fp_bpw1.41_steps1500: 12 complete, 12 pruned
+  #  2  0.9778  {'lr': 0.0037861878865426053, 'weight_decay': 0.0, 'warmup': 150, 'optim': 'muon', 'muon_lr_mult': 1.8571470500322553, 'muon_ns_steps': 10}
+  # 18  0.9793  {'lr': 0.0063736556691881, 'weight_decay': 0.0, 'warmup': 0, 'optim': 'muon', 'muon_lr_mult': 0.5717702872713241, 'muon_ns_steps': 10}
+  # 23  0.9794  {'lr': 0.005357168677512796, 'weight_decay': 0.0, 'warmup': 0, 'optim': 'muon', 'muon_lr_mult': 0.5913611409354671, 'muon_ns_steps': 10}
+  # 14  0.9796  {'lr': 0.006212324877203718, 'weight_decay': 0.0, 'warmup': 0, 'optim': 'muon', 'muon_lr_mult': 0.5905768116530015, 'muon_ns_steps': 10}
+  #  3  0.9799  {'lr': 0.0023284358298935864, 'weight_decay': 0.0, 'warmup': 50, 'optim': 'muon_ds', 'muon_lr_mult': 0.7876182471872988}
+  #  7  0.9809  {'lr': 0.006262283882354773, 'weight_decay': 0.01, 'warmup': 250, 'optim': 'muon_ds', 'muon_lr_mult': 2.7885782162827892}
+  # 15  0.9815  {'lr': 0.0012855371894687532, 'weight_decay': 0.0, 'warmup': 150, 'optim': 'muon_ds', 'muon_lr_mult': 1.850400571843122}
+  #  1  0.9824  {'lr': 0.0024972383369207484, 'weight_decay': 0.01, 'warmup': 50, 'optim': 'adamw'}
+  importance: {'lr': 0.397, 'optim': 0.278, 'weight_decay': 0.129, 'muon_ns_steps': 0.072, 'warmup': 0.067, 'muon_lr_mult': 0.058}

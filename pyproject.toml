@@ -8,6 +8,7 @@ dependencies = ["numpy>=1.26", "torch>=2.9", "lightning>=2.5", "jsonargparse[sig
 
 [project.optional-dependencies]
 gpu = ["helion>=1.6"]
+tune = ["optuna>=4.0"]
 
 [project.scripts]
 lb-train = "littlebit_scratch.train:main"
@@ -16,6 +17,7 @@ lb-infer-bench = "littlebit_scratch.infer_bench:main"
 lb-mem-bench = "littlebit_scratch.mem_bench:main"
 lb-gpu-bench = "littlebit_scratch.gpu_bench:main"
 lb-demo-infer = "littlebit_scratch.demo_infer:main"
+lb-tune = "littlebit_scratch.tune:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

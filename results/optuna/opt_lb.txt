@@ -1,0 +1,11 @@
+
+study littlebit_bpw1.41_steps1500: 29 complete, 19 pruned
+  # 34  1.0205  {'lr': 0.009476012685943369, 'weight_decay': 0.01, 'warmup': 150, 'optim': 'muon_ds', 'muon_lr_mult': 0.6674622939367231, 'latent_lr_mult': 0.020898556052921142, 'scale_lr_mult': 0.8527793292504904, 'fp_warmup': 600}
+  #  4  1.0218  {'lr': 0.011670505140817827, 'weight_decay': 0.01, 'warmup': 150, 'optim': 'muon_ds', 'muon_lr_mult': 0.5048161674169503, 'latent_lr_mult': 0.01636407150807599, 'scale_lr_mult': 0.2758115279137368, 'fp_warmup': 600}
+  # 28  1.0248  {'lr': 0.017513239557445673, 'weight_decay': 0.01, 'warmup': 100, 'optim': 'muon_ds', 'muon_lr_mult': 0.4280616809539174, 'latent_lr_mult': 0.018332324963029632, 'scale_lr_mult': 0.5002803233519172, 'fp_warmup': 600}
+  # 29  1.0248  {'lr': 0.01064369525188574, 'weight_decay': 0.01, 'warmup': 200, 'optim': 'muon_ds', 'muon_lr_mult': 0.6290248116590677, 'latent_lr_mult': 0.015416407637085934, 'scale_lr_mult': 0.4444413537369074, 'fp_warmup': 600}
+  # 47  1.0256  {'lr': 0.01195043348609587, 'weight_decay': 0.01, 'warmup': 150, 'optim': 'muon_ds', 'muon_lr_mult': 0.3610690580622028, 'latent_lr_mult': 0.029462939422216096, 'scale_lr_mult': 0.40301326852592406, 'fp_warmup': 600}
+  # 35  1.0270  {'lr': 0.008861904505820486, 'weight_decay': 0.01, 'warmup': 200, 'optim': 'muon_ds', 'muon_lr_mult': 0.6172311649063986, 'latent_lr_mult': 0.012679612544631813, 'scale_lr_mult': 0.24804648721585423, 'fp_warmup': 600}
+  # 38  1.0302  {'lr': 0.012967349692470922, 'weight_decay': 0.01, 'warmup': 100, 'optim': 'muon_ds', 'muon_lr_mult': 0.6237753712734802, 'latent_lr_mult': 0.01443478750698703, 'scale_lr_mult': 0.34982180163748267, 'fp_warmup': 600}
+  # 25  1.0313  {'lr': 0.010778265193703153, 'weight_decay': 0.1, 'warmup': 0, 'optim': 'muon_ds', 'muon_lr_mult': 0.7271536436206517, 'latent_lr_mult': 0.013974679981008539, 'scale_lr_mult': 0.6271907864704691, 'fp_warmup': 600}
+  importance: {'latent_lr_mult': 0.486, 'lr': 0.212, 'warmup': 0.185, 'muon_lr_mult': 0.065, 'weight_decay': 0.019, 'scale_lr_mult': 0.017, 'fp_warmup': 0.014, 'optim': 0.002, 'muon_ns_steps': 0.0}

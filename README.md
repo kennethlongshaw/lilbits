@@ -195,6 +195,32 @@ Saved as `results/bench_d128_matched_params_optimizers.json`.
 | LittleBit, PyTorch Muon 10 steps | 1.066 | 1,500 (300 FP) / 3.07M | 203 s (135 ms) | 410,256 | 4.80 MiB | 253 MiB | 67.7 KiB (1.40 bpw) | 101.0 KiB | 25.8 ms |
 | LittleBit, DeepSeek Muon | 1.065 | 1,500 (300 FP) / 3.07M | 182 s (121 ms) | 410,256 | 4.80 MiB | 235 MiB | 67.7 KiB (1.40 bpw) | 101.0 KiB | 27.4 ms |
 
+## Optuna sweep of training / optimizer settings (`uv run lb-tune`)
+
+`lb-tune` (Optuna TPE, 4 worker processes sharing a journal file, median pruning after step 800) searched
+lr, weight decay, warmup, optimizer (AdamW / torch Muon / DeepSeek Muon), Muon lr multiplier and NS steps, and for
+LittleBit also the latent and scale lr multipliers and the FP warm-start length (0/150/300/600; SVD+ITQ init).
+Matched params (1.41 bpw), 1,500 steps. The hand-tuned default was enqueued as trial 0. Then the top 3 and the
+default were re-run on seeds 0-2 (each seed is also a different random Markov chain, so compare within a seed).
+Logs, journal and confirmation JSON in `results/optuna/`.
+
+| | trials (complete / pruned) | default, seeds 0/1/2 (mean) | best tuned, seeds 0/1/2 (mean) | gain |
+|---|---|---|---|---|
+| LittleBit | 29 / 19 | 1.050 / 1.012 / 1.008 (1.023) | 1.025 / 0.996 / 0.992 (1.004) | -0.019, every seed |
+| FP16 baseline | 12 / 12 | 0.984 / 0.953 / 0.947 (0.961) | 0.978 / 0.951 / 0.942 (0.957) | -0.004 |
+
+FP-vs-LittleBit gap: 0.062 → 0.048 (mean over seeds).
+
+Best LittleBit settings (top 3 agree): DeepSeek Muon, lr ≈ 0.01 (Muon lr mult ≈ 0.4-0.7), **latent lr mult ≈ 0.015-0.02**
+(vs 0.1), weight decay 0.01, warmup 100-150, **FP warm start 600** (the top of the searched range). Optuna's
+importance ranking: latent lr mult 0.49, lr 0.21, warmup 0.19, Muon lr mult 0.07; weight decay, scale lr mult,
+warm-start length, optimizer and NS steps all ≤ 0.02. Best FP settings: torch Muon with 10 NS steps, lr ≈ 0.004-0.006,
+no decay — a small gain over AdamW.
+
+So nothing big was being missed: the one setting that matters is slowing the 1-bit latents down even further.
+The warm start hit the edge of its range, so longer FP warm starts (i.e. closer to "train FP, then compress")
+may help more.
+
 ## Baseline vs LittleBit on the same data (`uv run lb-bench`)
 
 All three train on the identical Markov token stream (same seed), d_model 128, 2 blocks, batch 32 × seq 64,
@@ -353,6 +379,7 @@ operands instead of FP32 (±1 is exact in FP16), and fuse the two residual paths
 - `src/littlebit_scratch/packed.py`: bit-packed inference export
 - `src/littlebit_scratch/mem_bench.py`: `lb-mem-bench`, inference memory/speed of FP vs cached vs packed
 - `src/littlebit_scratch/helion_kernels.py`: Helion kernels for packed inference
+- `src/littlebit_scratch/tune.py`: `lb-tune`, Optuna sweep over training / optimizer settings
 - `src/littlebit_scratch/demo_infer.py`: `lb-demo-infer`, train → pack → inference with torch / Helion backends
 - `src/littlebit_scratch/gpu_bench.py`: `lb-gpu-bench`, GPU speed of dense vs packed torch vs packed Helion
 - `src/littlebit_scratch/bench.py`: `lb-bench`, FP vs LittleBit size/loss/time/memory comparison

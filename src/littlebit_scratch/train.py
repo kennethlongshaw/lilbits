@@ -122,7 +122,7 @@ def latent_stats(model, prev: dict) -> tuple[float, float, dict]:
 
 
 def _fit(fabric: Fabric, model, label: str, tc: TrainConfig, source, seq_len: int, steps: int, offset: int,
-         eval_batches, history: list, t0: float):
+         eval_batches, history: list, t0: float, on_eval=None):
     opts = make_optimizers(model, tc)
     model, *opts = fabric.setup(model, *opts)
 
@@ -148,13 +148,16 @@ def _fit(fabric: Fabric, model, label: str, tc: TrainConfig, source, seq_len: in
             history.append({"step": step, "phase": label, "train": loss.item(), "eval": ev, "flip": flip,
                             "near_zero": nz})
             fabric.log_dict({"train_loss": loss.item(), "eval_loss": ev, "sign_flips": flip}, step=step)
+            if on_eval is not None:
+                on_eval(step, ev)  # e.g. Optuna pruning; may raise
             if tc.verbose:
                 fabric.print(f"[{label:9s}] step {step:5d}  train {loss.item():.4f}  eval {ev:.4f}  "
                              f"sign-flips {flip:.4%}  near-zero {nz:.2%}  {time.time() - t0:.0f}s")
     return model.module
 
 
-def train(cfg: Config, tc: TrainConfig, source, eval_batches=None, fabric: Fabric | None = None) -> dict:
+def train(cfg: Config, tc: TrainConfig, source, eval_batches=None, fabric: Fabric | None = None,
+          on_eval=None) -> dict:
     """Train from scratch. With tc.fp_warmup > 0 (LittleBit only), the first fp_warmup steps train a
     full-precision copy, which is then SVD(+ITQ)-converted, as the paper does with a pretrained model."""
     fabric = fabric or Fabric(accelerator=tc.accelerator, devices=tc.devices, precision=tc.precision)
@@ -162,7 +165,8 @@ def train(cfg: Config, tc: TrainConfig, source, eval_batches=None, fabric: Fabri
     eval_batches = eval_batches or [source.sample(tc.batch, cfg.seq_len) for _ in range(4)]
     eval_batches = [fabric.to_device(b) for b in eval_batches]
     history: list = []
-    run = dict(tc=tc, source=source, seq_len=cfg.seq_len, eval_batches=eval_batches, history=history, t0=time.time())
+    run = dict(tc=tc, source=source, seq_len=cfg.seq_len, eval_batches=eval_batches, history=history, t0=time.time(),
+               on_eval=on_eval)
     offset = tc.fp_warmup if (tc.fp_warmup > 0 and cfg.linear == "littlebit") else 0
     if offset:
         with fabric.init_module():
