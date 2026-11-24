@@ -6,6 +6,22 @@ transformer block, trained **from scratch** (no pretrained teacher, no distillat
 Reference: Lee et al., *LittleBit: Ultra Low-Bit Quantization via Latent Factorization*
 (NeurIPS 2025, arXiv:2506.13771) and LittleBit-2 (arXiv:2603.00042).
 
+## Current best results (read this first)
+
+The sections below are a lab notebook in the order things were tried, so early tables are superseded.
+Best numbers so far (synthetic order-2 Markov data, d_model 128, 2 blocks, 1,500 steps, 3.07M tokens,
+mean of seeds 0-2; best possible loss ≈ 0.89-0.90 depending on seed):
+
+| model | bpw (block linears) | trainable params | stored model | eval loss |
+|---|---|---|---|---|
+| FP16 baseline, tuned (torch Muon, 10 NS steps) | 16 | 412,288 | 805 KiB | 0.957 |
+| LittleBit, tuned (FP warm start 600 + SVD+ITQ, DeepSeek Muon, latent lr ×0.02) | 1.40 | 410,256 | 101 KiB packed | 1.004 |
+| LittleBit, earlier hand-tuned default (FP warm start 300 + SVD+ITQ, AdamW, latent lr ×0.1) | 1.40 | 410,256 | 101 KiB packed | 1.023 |
+| LittleBit, first version (random init, 0.99 bpw, 253k params), seed 0 only | 0.99 | 253,068 | 81 KiB packed | 1.386 |
+
+See "Optuna sweep" for the tuned settings and "Baseline vs LittleBit" / "Bit-packed inference export" for
+size, memory and speed.
+
 ## The layer
 
 Every block linear (`q, k, v, o, gate, up, down`) stores
@@ -57,7 +73,7 @@ uv run lb-train --help                                       # every model.* / t
 The default data is a random sparse order-2 Markov chain (vocab 32, 4 successors per context), so the
 best achievable loss (its entropy rate) is known and printed. `--out run.json` saves the loss history.
 
-### CPU results (d_model 128, 2 blocks, seq 64, batch 32, 1,500 steps, seed 0)
+### First CPU results (superseded; random init, 0.99 bpw, d_model 128, 2 blocks, 1,500 steps, seed 0)
 
 Entropy floor ≈ 0.894 nats, uniform = 3.466.
 
