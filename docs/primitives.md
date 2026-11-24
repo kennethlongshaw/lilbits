@@ -32,7 +32,7 @@ testable on its own and has a dense FP reference.
 | Index / retrieval | 4-bit K/V cache with GQA (one KV head) | ✅ | `mixers/sparse_index.py` |
 | | sign(K) signatures + XOR/popcount scoring | ✅ | `mixers/sparse_index.py` |
 | | Block summaries every 64 tokens (shallow from prelude, deep from final loop) | ✅ | `mixers/sparse_index.py`, `models/looped_index.py` |
-| | Top-k exact attention with dense fallback when scores are flat | ✅ (masked dense compute; no sparse gather kernel yet) | `mixers/sparse_index.py` |
+| | Top-k exact attention with dense fallback when scores are flat | ✅ (inference gathers and dequantizes only the selected rows: one decode step at 64k context is 1.6 ms vs 71 ms masked, `benchmarks/index_bench.py`; training keeps the masked form) | `mixers/sparse_index.py` |
 | | Indexer trained to match dense attention (KL on block mass) | ✅ | `mixers/sparse_index.py` |
 | Coda | Higher-precision tail layers | ✅ FP GDN coda | `models/looped_index.py` |
 | | Sequential MTP heads for k drafts | ✅ | `models/looped_index.py` |
@@ -59,7 +59,7 @@ testable on its own and has a dense FP reference.
   can reuse it.
 
 The whole design is assembled in `models/looped_index.py` (`LoopedIndexLM`) and trained stage by stage in
-`examples/09_looped_index_lm.py`. Still open: uneven bpw allocation, a sparse-gather retrieval kernel, and a training run long enough to
+`examples/09_looped_index_lm.py`. Still open: uneven bpw allocation and a training run long enough to
 measure recall.
 
 ## Build order (matches the training stages)

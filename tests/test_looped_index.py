@@ -75,6 +75,24 @@ def test_retrieval_with_everything_selected_is_dense_causal_attention():
     torch.testing.assert_close(out, ref)
 
 
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("flat", [1.0, 0.0])  # 0.0: every query falls back to dense
+def test_gathered_retrieval_equals_masked(packed, flat):
+    torch.manual_seed(0)
+    r = IndexedRetrieval(16, 2, 8, top_blocks=2, top_k=3, flat=flat)
+    idx = TokenIndex(block=4, packed=packed)
+    e = torch.randn(2, 24, 16)
+    with torch.no_grad():
+        for b in range(6):
+            r.write(e[:, 4 * b : 4 * b + 4], idx)
+            r.write_summaries(e[:, 4 * b : 4 * b + 4].mean(1), e[:, 4 * b : 4 * b + 4].mean(1), idx)
+        for pos0, L in [(20, 4), (21, 1), (2, 2), (6, 1)]:  # full block, decode step, first block
+            x = torch.randn(2, L, 16)
+            a, _ = r(x, idx, pos0=pos0, gather=False)
+            b, _ = r(x, idx, pos0=pos0, gather=True)
+            torch.testing.assert_close(a, b, rtol=1e-5, atol=1e-5)
+
+
 def test_index_rollback():
     r = IndexedRetrieval(16, 2, 8)
     idx = TokenIndex(block=4)

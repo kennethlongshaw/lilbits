@@ -82,8 +82,10 @@ class TokenIndex:
     deep: list = field(default_factory=list)
     length: int = 0
     packed: bool = False
+    _cat: dict = field(default_factory=dict, repr=False)  # concatenated storage, rebuilt after writes
 
     def append(self, K: torch.Tensor, V: torch.Tensor, sig: torch.Tensor) -> None:
+        self._cat.clear()
         if self.packed:
             self.K.append(quant4(K))
             self.V.append(quant4(V))
@@ -93,19 +95,44 @@ class TokenIndex:
         self.sig.append(sig)
         self.length += K.shape[1]
 
-    def _cat(self, xs: list) -> torch.Tensor:
-        if self.packed:
-            return torch.cat([dequant4(c, s) for c, s in xs], 1)
-        return torch.cat(xs, 1)
+    def _stored(self, name: str):
+        """Concatenated storage of K, V or sig: packed (codes, scales), or float / uint8 tensors."""
+        if name not in self._cat:
+            xs = getattr(self, name)
+            if self.packed and name != "sig":
+                self._cat[name] = (torch.cat([c for c, _ in xs], 1), torch.cat([s for _, s in xs], 1))
+            else:
+                self._cat[name] = torch.cat(xs, 1)
+        return self._cat[name]
+
+    def _full(self, name: str) -> torch.Tensor:
+        x = self._stored(name)
+        return dequant4(*x) if isinstance(x, tuple) else x
 
     def keys(self) -> torch.Tensor:
-        return self._cat(self.K)
+        return self._full("K")
 
     def values(self) -> torch.Tensor:
-        return self._cat(self.V)
+        return self._full("V")
 
     def signatures(self) -> torch.Tensor:
-        return torch.cat(self.sig, 1)
+        return self._stored("sig")
+
+    def rows(self, name: str, pos: torch.Tensor) -> torch.Tensor:
+        """Gather entries at positions pos (B, ...) -> (B, ..., D), dequantizing only those rows."""
+        x = self._stored(name)
+        B = pos.shape[0]
+        flat = pos.reshape(B, -1)
+
+        def take(t):
+            return t.gather(1, flat[..., None].expand(-1, -1, t.shape[-1]))
+
+        if isinstance(x, tuple):
+            codes, scale = x
+            out = dequant4(take(codes), scale.gather(1, flat))
+        else:
+            out = take(x)
+        return out.view(*pos.shape, -1)
 
     def snapshot(self) -> tuple:
         return (len(self.K), len(self.shallow), len(self.deep), self.length)
@@ -115,6 +142,7 @@ class TokenIndex:
         nseg, ns, nd, length = snap
         del self.K[nseg:], self.V[nseg:], self.sig[nseg:], self.shallow[ns:], self.deep[nd:]
         self.length = length
+        self._cat.clear()
 
     def nbytes(self) -> dict:
         """Bytes held per tier. Packed: the int4 codes + FP16 scales stored. Training (float K/V): the size
@@ -168,8 +196,18 @@ class IndexedRetrieval(nn.Module):
         if deep is not None:
             index.deep.append(self.k_norm(self.k_deep(deep.detach())))
 
-    def forward(self, x: torch.Tensor, index: TokenIndex, pos0: int, distill: bool = False):
-        """x: (B, L, d) queries at positions pos0 .. pos0+L-1 (one block). Returns (out, aux dict)."""
+    def forward(self, x: torch.Tensor, index: TokenIndex, pos0: int, distill: bool = False, gather: bool | None = None):
+        """x: (B, L, d) queries at positions pos0 .. pos0+L-1 (one block). Returns (out, aux dict).
+
+        gather (default: when autograd is off, i.e. inference): attend only to the selected tokens, gathering and
+        dequantizing just those K/V rows, so a decode step costs O(top_k + block) instead of O(context). Otherwise
+        (training) the selection is applied as a mask over dense attention. Both select the same tokens."""
+        if gather is None:
+            gather = not torch.is_grad_enabled() and not distill
+        if gather:
+            out = self._gathered(x, index, pos0)
+            if out is not None:
+                return out
         B, L, _ = x.shape
         H, D = self.H, self.D
         cur = pos0 // index.block
@@ -202,7 +240,8 @@ class IndexedRetrieval(nn.Module):
                 chosen.scatter_(2, scores.topk(tb, -1).indices, True)
                 in_chosen = chosen.repeat_interleave(index.block, -1)  # B, L, prev
                 agree = sign_agreement(pack_bits(qm), index.signatures()[:, :prev]).float()
-                agree = agree.masked_fill(~in_chosen, -1.0)
+                agree = agree - torch.arange(prev, device=x.device) / (prev + 1)  # ties: earlier token wins
+                agree = agree.masked_fill(~in_chosen, -1e9)
                 k = min(self.top_k, tb * index.block)
                 remote = torch.zeros(B, L, prev, dtype=torch.bool, device=x.device)
                 remote.scatter_(2, agree.topk(k, -1).indices, True)
@@ -214,4 +253,45 @@ class IndexedRetrieval(nn.Module):
         att = torch.einsum("blhd,bpd->bhlp", q, K) / math.sqrt(D)
         att = att.masked_fill(~mask.unsqueeze(1), float("-inf")).softmax(-1)
         out = torch.einsum("bhlp,bpd->blhd", att, V).reshape(B, L, H * D)
+        return self.o(out), aux
+
+    def _gathered(self, x: torch.Tensor, index: TokenIndex, pos0: int):
+        """Sparse path: gather the selected tokens. Returns None when a query falls back to dense attention."""
+        B, L, _ = x.shape
+        H, D, blk = self.H, self.D, index.block
+        cur = pos0 // blk
+        start = cur * blk
+        dev = x.device
+        q = self.q(x).view(B, L, H, D)
+        qpos = pos0 + torch.arange(L, device=dev)
+        local = start + torch.arange(blk, device=dev)  # the query's own block
+        pos_parts = [local.clamp(max=index.length - 1).expand(B, L, blk)]
+        valid_parts = [(local[None, :] <= qpos[:, None]).expand(B, L, blk)]
+        aux: dict = {"fallback": 0.0, "remote_frac": 0.0}
+        nb = min(len(index.shallow), len(index.deep), cur)
+        if nb > 0:
+            qm = q.mean(2)
+            summ = torch.stack(index.shallow[:nb], 1) + torch.stack(index.deep[:nb], 1)
+            scores = torch.einsum("bld,bnd->bln", qm, summ) / math.sqrt(D)
+            if nb > 1:
+                p = scores.softmax(-1)
+                ent = -(p * p.clamp_min(1e-12).log()).sum(-1) / math.log(nb)
+                if (ent > self.flat).any():
+                    return None  # dense fallback for some query: use the masked path
+            tb = min(self.top_blocks, nb)
+            chosen = scores.topk(tb, -1).indices  # B, L, tb
+            cand = (chosen[..., None] * blk + torch.arange(blk, device=dev)).flatten(2)  # B, L, tb*blk
+            sig = index.rows("sig", cand)  # B, L, tb*blk, nbytes
+            ham = _POPCOUNT.to(dev)[(pack_bits(qm).unsqueeze(2) ^ sig).long()].sum(-1, dtype=torch.int32)
+            agree = (8 * sig.shape[-1] - ham).float() - cand / (start + 1)  # same tie-break as the masked path
+            k = min(self.top_k, tb * blk)
+            pos_parts.append(cand.gather(-1, agree.topk(k, -1).indices))
+            valid_parts.append(torch.ones(B, L, k, dtype=torch.bool, device=dev))
+            aux["remote_frac"] = k / start
+        pos = torch.cat(pos_parts, -1)  # B, L, n
+        valid = torch.cat(valid_parts, -1)
+        K, V = index.rows("K", pos), index.rows("V", pos)  # B, L, n, D: only these rows are dequantized
+        att = torch.einsum("blhd,blnd->bhln", q, K) / math.sqrt(D)
+        att = att.masked_fill(~valid.unsqueeze(1), float("-inf")).softmax(-1)
+        out = torch.einsum("bhln,blnd->blhd", att, V).reshape(B, L, H * D)
         return self.o(out), aux
