@@ -173,6 +173,21 @@ Measured with the fused forward, configs run one after another (not concurrently
 | Compression vs FP16 (blocks / whole) | 1.0x / 1.0x | 11.4x / 8.0x | 11.4x / 8.0x |
 | Inference ms per batch (unpacked) | 20.0 | 21.5 | 22.8 |
 
+Same, with weight decay 0 (the default), saved as `results/bench_d128_matched_params_wd0.json`:
+
+| metric | FP16 baseline | LittleBit ~1.41 bpw, SVD+ITQ init (pure from scratch) | LittleBit ~1.41 bpw, 300-step FP warm start + SVD+ITQ |
+|---|---|---|---|
+| Final eval loss (floor 0.895) | 0.984 | 1.146 | 1.056 |
+| Training steps / tokens seen | 1,500 / 3.07M | 1,500 / 3.07M | 1,500 / 3.07M (300 FP) |
+| Wall time (ms/step) | 98 s (66) | 134 s (89) | 124 s (83) |
+| Trainable params (FP32 while training) | 412,288 | 410,256 | 410,256 |
+| Train state: weights+grads+AdamW | 6.29 MiB | 6.26 MiB | 6.26 MiB |
+| Train peak memory (RSS delta / CUDA peak) | 230 MiB | 244 MiB | 239 MiB |
+| Deployed block linears | 772.0 KiB (16.00 bpw) | 67.7 KiB (1.40 bpw) | 67.7 KiB (1.40 bpw) |
+| Deployed whole model | 805.2 KiB | 101.0 KiB | 101.0 KiB |
+| Compression vs FP16 (blocks / whole) | 1.0x / 1.0x | 11.4x / 8.0x | 11.4x / 8.0x |
+| Inference ms per batch (unpacked) | 17.9 | 22.9 | 18.7 |
+
 Notes:
 - "Deployed" counts LittleBit block weights as packed sign bits + FP16 scales, everything else as FP16.
   The code doesn't actually pack bits yet; that's the storage format the numbers assume.
