@@ -99,6 +99,11 @@ class PackedBitLinear(nn.Module):
         w = self.lut[self.codes.long()].flatten()[:n].view(self.out_features, self.in_features)
         return w * self.scale.float()
 
+    def storage_bytes(self) -> int:
+        return sum(b.numel() * b.element_size() for n, b in self.named_buffers() if n != "lut") + (
+            0 if self.bias is None else self.bias.numel() * 2
+        )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = F.rms_norm(x, (x.shape[-1],)) if self.norm else x
         x = act_quant(x, self.act_bits) if self.act_bits else x

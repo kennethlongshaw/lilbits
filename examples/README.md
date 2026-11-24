@@ -14,9 +14,28 @@ Small, runnable scripts showing how the primitives fit together. Run from the re
 | `08_llm_jepa.py` | LLM-JEPA: next-token loss plus a JEPA embedding loss on paired views (Text, Code), [PRED] tokens as the predictor, block-causal packing in one pass, EMA or online target, loss dropout; compares all variants on quality and full train/infer cost (`--linear`, `--k-pred`, `--ema-decay`) |
 | `09_looped_index_lm.py` | the full lean-decoder design: LittleBit GDN prelude, looped core with shared signs + per-loop scales, per-loop GDN state, loop memory, sparse index (4-bit K/V, sign signatures, block summaries, dense fallback), FP coda with MTP drafts, parallel verify with rollback and adaptive k, decode halting; trained in 5 stages next to a dense FP reference on recall / two-hop data, with memory-tier bytes and full cost metrics (`--steps`, `--length`, `--loops`) |
 
+## Train / test / infer
+
+Every example runs on the same harness (`lilbits.runner`, built on Lightning Fabric) and has the same options:
+
+```bash
+uv run python examples/04_decision_model.py                     # --mode all: train, save, test, infer
+uv run python examples/04_decision_model.py --mode train        # train and save results/ckpt/04_decision_model.pt
+uv run python examples/04_decision_model.py --mode test         # load the checkpoint, held-out quality
+uv run python examples/04_decision_model.py --mode infer        # load the checkpoint, deployment cost
+uv run python examples/01_train_and_pack.py --mode infer --kernel lut   # runtime options can change after training
+```
+
+- **train** goes through Fabric (`fab.setup`, `fab.backward`, or `lilbits.training.train`), with `--accelerator`,
+  `--devices` and `--precision` passed through. Checkpoints are written and read with `fab.save` / `fab.load` and
+  store the arguments that shaped the models, so test and infer rebuild exactly the same models.
+- **test** is held-out quality: loss, accuracy, calibration, bits per byte, depth curves, whatever fits the example.
+- **infer** is deployment: packing to 1- or 2-bit weights, LUT kernels, decode latency, cache and state sizes.
+- Every phase reports wall time, CPU time and peak RSS growth, and every run reports params, weight RAM, deployed
+  size and the checkpoint file size, ending with a `METRICS {json}` line.
+
 Every example defaults to a short smoke run that proves the code path works; pass `--steps` to actually train.
-Examples that train print a `METRICS {json}` line with train wall/CPU/peak RSS, inference cost, RAM weights,
-checkpoint and stored size. `benchmarks/examples_bench.py` runs them all and tabulates it
-(`results/examples_bench.md`).
+`benchmarks/examples_bench.py` runs train, test and infer as three separate processes per example and tabulates
+process wall, CPU and peak RSS next to each phase's own numbers (`results/examples_bench.md`).
 
 See `docs/primitives.md` for how these map onto the target architecture.

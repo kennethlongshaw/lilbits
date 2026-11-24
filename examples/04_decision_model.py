@@ -22,24 +22,26 @@ calibration (ECE, Brier), how often a choice flips when only the codes / order a
 
 Not included yet (see docs/primitives.md): sparse state index, loop memory, per-loop scales, MoE, halting.
 
+    train   Lightning Fabric loop, OneCycle schedule, Muon / AdamW groups from make_optimizers
+    test    accuracy, ECE, Brier, ordinal MAE and code-swap flip rate on 256 held-out states
+    infer   ms to prefill one state, then ms per question with 64 questions forked from it as one batch
+
 This is a code demo: the default is a 30-step smoke run that only shows the pieces fit together, so
 the accuracies it prints are near chance. Pass --steps to actually train.
 
     uv run python examples/04_decision_model.py                    # LittleBit prelude + core, smoke run
     uv run python examples/04_decision_model.py --linear bitnet --loops 3
+    uv run python examples/04_decision_model.py --mode infer       # reuse the saved checkpoint
 """
 
 from __future__ import annotations
 
-import argparse
-import json
 import time
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from lilbits.measure import Meter, size_report, state_dict_bytes
 from lilbits.models.decision import (
     StatefulBlock,
     TypedReadout,
@@ -51,6 +53,7 @@ from lilbits.models.decision import (
     ordinal_stats,
 )
 from lilbits.models.tinylm import Config, make_linear_factory
+from lilbits.runner import Example, run
 from lilbits.training.train import TrainConfig, make_optimizers
 
 # ---- vocabulary -------------------------------------------------------------------------------
@@ -226,77 +229,62 @@ def timing(model, batch, n_q: int = 64) -> dict:
     return {"prefill_ms_per_state": prefill_ms, "ms_per_question_batched": per_q}
 
 
-def main():
-    ap = argparse.ArgumentParser()
+def add_args(ap):
     ap.add_argument("--linear", default="littlebit", choices=["fp", "littlebit", "bitnet"])
     ap.add_argument("--bpw", type=float, default=1.0)
     ap.add_argument("--loops", type=int, default=2)
     ap.add_argument("--d", type=int, default=96)
-    ap.add_argument("--steps", type=int, default=30)
+    ap.add_argument("--steps", type=int, default=30, help="training steps (default: smoke run)")
     ap.add_argument("--batch", type=int, default=32)
-    ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--mixer", default="gdn", help="gdn | mamba2 | gla | mlstm | mingru")
-    args = ap.parse_args()
-    torch.manual_seed(0)
-    torch.set_num_threads(args.threads)
-    g = torch.Generator().manual_seed(0)
-    model = DecisionModel(args.d, 4, args.loops, args.linear, args.bpw, args.mixer)
-    tc = TrainConfig(lr=3e-3, latent_lr_mult=0.1)
-    opts = make_optimizers(model, tc)
+
+
+def build(args, meta):
+    return {"model": DecisionModel(args.d, 4, args.loops, args.linear, args.bpw, args.mixer)}
+
+
+def held_out() -> dict:
+    return make_batch(256, torch.Generator().manual_seed(123))
+
+
+def train_fn(models, args, fab):
+    model = models["model"]
+    opts = make_optimizers(model, TrainConfig(lr=3e-3, latent_lr_mult=0.1))
     sched = [
         torch.optim.lr_scheduler.OneCycleLR(
             o, max_lr=[pg["lr"] for pg in o.param_groups], total_steps=args.steps, pct_start=0.1
         )
         for o in opts
     ]
-    test = make_batch(256, torch.Generator().manual_seed(123))
-    t0 = time.time()
-    train_meter = Meter().__enter__()
-    for step in range(args.steps):
-        loss, _parts = loss_fn(model, make_batch(args.batch, g))
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        for o, s in zip(opts, sched, strict=False):
+    wrapped, *opts = fab.setup(model, *opts)
+    g = torch.Generator().manual_seed(args.seed)
+    loss = torch.zeros(())
+    for _ in range(args.steps):
+        loss, _parts = loss_fn(wrapped, fab.to_device(make_batch(args.batch, g)))
+        fab.backward(loss)
+        fab.clip_gradients(wrapped, opts[0], max_norm=1.0)
+        for o, sc in zip(opts, sched, strict=True):
             o.step()
             o.zero_grad(set_to_none=True)
-            s.step()
-        if step % max(1, args.steps // 4) == 0 or step == args.steps - 1:
-            ev = evaluate(model, test)
-            print(
-                f"step {step:5d}  loss {loss.item():.3f}  "
-                + "  ".join(f"{k} acc {v['acc']:.2f}" for k, v in ev.items())
-                + f"  {time.time() - t0:.0f}s",
-                flush=True,
-            )
-    train_meter.__exit__()
-    ev = evaluate(model, test)
-    print(
-        f"\n{args.linear} prelude+core ({args.bpw:g} bpw if littlebit), {args.loops} loops, "
-        f"{sum(p.numel() for p in model.parameters()):,} params"
-    )
-    for kind, m in ev.items():
-        print(f"  {kind:6s} " + "  ".join(f"{k} {v:.3f}" for k, v in m.items()))
-    print(
-        "  temps  "
-        + "  ".join(f"{k} {t:.2f}" for k, t in zip(TYPES, model.readout.log_temp.exp().tolist(), strict=False))
-    )
-    with Meter() as infer_meter:
-        t = timing(model, test)
-    print("  " + "  ".join(f"{k} {v:.2f}" for k, v in t.items()))
-    sizes = size_report(model)
-    metrics = {
-        "train_steps": args.steps,
-        **train_meter.as_dict("train_"),
-        **infer_meter.as_dict("infer_"),
-        **t,
-        "params": sizes["trainable_params"],
-        "stored_bytes": sizes["deployed_total_bytes"],
-        "ram_weights_bytes": sum(t.numel() * t.element_size() for t in model.state_dict().values()),
-        "checkpoint_bytes": state_dict_bytes(model),
-        "choice_acc": ev["choice"]["acc"],
-    }
-    print("METRICS " + json.dumps(metrics))
+            sc.step()
+    return {"steps": args.steps, "last_loss": loss.item()}, {}
 
+
+def test_fn(models, args):
+    model = models["model"]
+    ev = evaluate(model, held_out())
+    model.eval()
+    temps = dict(zip(TYPES, model.readout.log_temp.exp().tolist(), strict=True))
+    return {**{f"{k}_{m}": v for k, d in ev.items() for m, v in d.items()}, "temperatures": temps}
+
+
+def infer_fn(models, args):
+    out = timing(models["model"], held_out())
+    models["model"].eval()
+    return out
+
+
+EXAMPLE = Example("04_decision_model", __doc__ or "", add_args, build, train_fn, test_fn, infer_fn)
 
 if __name__ == "__main__":
-    main()
+    run(EXAMPLE)

@@ -1,71 +1,102 @@
-"""Train a tiny LM whose block linears are LittleBit (or BitNet), then pack it for inference.
+"""Train a tiny LM whose block linears are LittleBit (or BitNet, or FP), then pack it for inference.
+
+train   Lightning Fabric loop (lilbits.training.train): LittleBit from a short FP warm start that is
+        SVD+ITQ-converted; BitNet and FP train directly
+test    held-out loss on the Markov source (entropy floor ~0.89)
+infer   pack to 1-bit signs (LittleBit) / 2-bit codes (BitNet), optionally on the LUT kernels (--kernel lut),
+        and time a 32x63 batch and a single-token call
 
 uv run python examples/01_train_and_pack.py --linear littlebit --bpw 0.8
-uv run python examples/01_train_and_pack.py --linear bitnet
+uv run python examples/01_train_and_pack.py --linear bitnet --mode train
+uv run python examples/01_train_and_pack.py --linear bitnet --mode infer --kernel lut
 """
 
-import argparse
-import json
+from __future__ import annotations
+
+import time
 
 import torch
 
 from lilbits.data import MarkovSource
-from lilbits.inference.packed import model_bytes, pack_model
+from lilbits.inference.lut import pack_lut
+from lilbits.inference.packed import pack_model
 from lilbits.layers.bitnet import pack_bitnet
-from lilbits.measure import Meter, size_report, state_dict_bytes
-from lilbits.models.tinylm import Config
+from lilbits.models.tinylm import Config, TinyLM
+from lilbits.runner import Example, run
 from lilbits.training.train import TrainConfig, evaluate, train
 
-ap = argparse.ArgumentParser()
-ap.add_argument("--linear", default="littlebit", choices=["fp", "littlebit", "bitnet"])
-ap.add_argument("--bpw", type=float, default=1.41)
-ap.add_argument("--steps", type=int, default=60)  # smoke run; raise to actually train
-args = ap.parse_args()
 
-src = MarkovSource(vocab=32, seed=0)
-evals = [src.sample(32, 64) for _ in range(4)]
-cfg = Config(linear=args.linear, bpw=args.bpw, itq_iters=50)
-# LittleBit trains best from a short FP warm start that is SVD+ITQ-converted; BitNet trains directly.
-tc = TrainConfig(
-    steps=args.steps,
-    optim="muon_ds",
-    lr=1e-2,
-    verbose=False,
-    accelerator="cpu",
-    fp_warmup=args.steps // 3 if args.linear == "littlebit" else 0,
-    latent_lr_mult=0.02,
-)
-with Meter() as train_meter:
-    model = train(cfg, tc, src, evals)["model"].eval()
-sizes = size_report(model)
-print(
-    f"{args.linear}: eval loss {evaluate(model, evals):.3f} (floor ~0.89), block bpw {sizes['block_bpw']:.2f}, "
-    f"stored {sizes['deployed_total_bytes'] / 1024:.1f} KiB"
+def add_args(ap):
+    ap.add_argument("--linear", default="littlebit", choices=["fp", "littlebit", "bitnet"])
+    ap.add_argument("--bpw", type=float, default=1.41)
+    ap.add_argument("--steps", type=int, default=60, help="training steps (default: smoke run)")
+    ap.add_argument("--kernel", default="unpack", choices=["unpack", "lut"], help="infer: packed kernel")
+
+
+def cfg(args) -> Config:
+    return Config(linear=args.linear, bpw=args.bpw, itq_iters=50)
+
+
+def held_out() -> list[torch.Tensor]:
+    src = MarkovSource(vocab=32, seed=0)
+    src._g.manual_seed(999)  # same chain, separate sample stream
+    return [src.sample(32, 64) for _ in range(4)]
+
+
+def build(args, meta):
+    return {"lm": TinyLM(cfg(args))}
+
+
+def train_fn(models, args, fab):
+    tc = TrainConfig(
+        steps=args.steps,
+        optim="muon_ds",
+        lr=1e-2,
+        verbose=False,
+        fp_warmup=args.steps // 3 if args.linear == "littlebit" else 0,
+        latent_lr_mult=0.02,
+        seed=args.seed,
+        log_every=max(1, args.steps),
+    )
+    src = MarkovSource(vocab=32, seed=0)
+    res = train(cfg(args), tc, src, [src.sample(32, 64) for _ in range(2)], fabric=fab)
+    models["lm"] = res["model"]
+    return {"steps": args.steps, "final_train_eval_loss": res["final_eval"]}, {}
+
+
+def test_fn(models, args):
+    return {"held_out_loss": evaluate(models["lm"], held_out()), "entropy_floor_approx": 0.89}
+
+
+def _ms(f, reps: int) -> float:
+    f()
+    t = time.perf_counter()
+    for _ in range(reps):
+        f()
+    return (time.perf_counter() - t) / reps * 1e3
+
+
+def infer_fn(models, args):
+    lm = models["lm"]
+    if args.linear == "littlebit":
+        pack_model(lm)
+    elif args.linear == "bitnet":
+        pack_bitnet(lm)
+    if args.kernel == "lut" and args.linear != "fp":
+        pack_lut(lm)
+    ev = held_out()
+    x, one = ev[0][:, :-1], ev[0][:1, :1]
+    return {
+        "kernel": args.kernel if args.linear != "fp" else "dense",
+        "packed_held_out_loss": evaluate(lm, ev),
+        "ms_per_32x63_batch": _ms(lambda: lm(x), 10),
+        "ms_per_single_token_call": _ms(lambda: lm(one), 50),
+    }
+
+
+EXAMPLE = Example(
+    "01_train_and_pack", __doc__ or "", add_args, build, train_fn, test_fn, infer_fn, runtime_args=("kernel",)
 )
 
-before = model_bytes(model)
-packed = pack_model(model) if args.linear == "littlebit" else pack_bitnet(model) if args.linear == "bitnet" else model
-x = evals[0][:, :-1]
-with torch.no_grad(), Meter() as infer_meter:
-    for _ in range(10):
-        packed(x)
-with torch.no_grad():
-    print(
-        f"packed: {before / 1024:.0f} KiB -> {model_bytes(packed) / 1024:.0f} KiB in RAM, "
-        f"eval loss {evaluate(packed, evals):.3f}, {infer_meter.wall_s / 10 * 1e3:.1f} ms per 32x63 batch"
-    )
-print(
-    "METRICS "
-    + json.dumps(
-        {
-            "train_steps": args.steps,
-            **train_meter.as_dict("train_"),
-            "infer_ms_per_batch": infer_meter.wall_s / 10 * 1e3,
-            "infer_cpu_ms_per_batch": infer_meter.cpu_s / 10 * 1e3,
-            "infer_peak_extra_mib": infer_meter.peak_extra_mib,
-            "ram_weights_bytes": model_bytes(packed),
-            "checkpoint_bytes": state_dict_bytes(packed),
-            "stored_bytes": sizes["deployed_total_bytes"],
-        }
-    )
-)
+if __name__ == "__main__":
+    run(EXAMPLE)

@@ -6,12 +6,11 @@ compute by decoding thinking tokens; this model spends it by looping its core bl
 state, freezing the state once the prediction stops changing, and reading the answer from it. No thought tokens
 are decoded, so there is no extra decoding latency or KV cache for them.
 
-What this script shows (default: a short smoke run on the Markov source, to prove the code paths work):
-  1. training with Huginn's sampled depth + truncated backprop (or Ouro's gated objective with --exit-gate)
-  2. test-time depth scaling: eval loss at 1, 2, 4, ... iterations of the same weights
-  3. adaptive exit: per-position iteration counts when states are frozen at convergence
-  4. cost of thinking: per-answer FLOPs and cache of r latent loops vs r decoded thinking tokens
-  5. METRICS line: train/infer wall, CPU, peak RSS, RAM weights, checkpoint and stored size
+Phases (default: a short smoke run on the Markov source, to prove the code paths work):
+    train   Huginn's sampled depth + truncated backprop (or Ouro's gated objective with --exit-gate), on Fabric
+    test    test-time depth scaling: held-out loss at 1, 2, 4, ... iterations of the same weights
+    infer   adaptive exit (per-position iteration counts when states freeze at convergence), and the cost of
+            thinking: per-answer FLOPs and cache of r latent loops vs r decoded thinking tokens
 
     uv run python examples/06_looped_reasoning_lm.py                       # FP, smoke run
     uv run python examples/06_looped_reasoning_lm.py --core-linear littlebit   # sub-1-bit-capable looped core
@@ -20,15 +19,12 @@ What this script shows (default: a short smoke run on the Markov source, to prov
 
 from __future__ import annotations
 
-import argparse
-import json
-
 import torch
 import torch.nn.functional as F
 
 from lilbits.data import MarkovSource
-from lilbits.measure import Meter, size_report, state_dict_bytes
 from lilbits.models.recurrent_depth import RecurrentDepthConfig, RecurrentDepthLM
+from lilbits.runner import Example, fit, run
 
 
 def block_flops_per_token(d: int, T: int) -> float:
@@ -37,8 +33,7 @@ def block_flops_per_token(d: int, T: int) -> float:
     return 2 * (4 * d * d + 3 * d * hidden) + 2 * 2 * T * d
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def add_args(ap):
     ap.add_argument("--steps", type=int, default=40, help="training steps (default: smoke run)")
     ap.add_argument("--d", type=int, default=96)
     ap.add_argument("--mean-recurrence", type=int, default=6)
@@ -46,12 +41,10 @@ def main():
     ap.add_argument("--linear", default="fp", choices=["fp", "littlebit", "bitnet"])
     ap.add_argument("--core-linear", default=None, choices=["fp", "littlebit", "bitnet"])
     ap.add_argument("--exit-gate", action="store_true", help="Ouro-style learned exit gate")
-    ap.add_argument("--threads", type=int, default=1)
-    args = ap.parse_args()
-    torch.manual_seed(0)
-    torch.set_num_threads(args.threads)
 
-    cfg = RecurrentDepthConfig(
+
+def cfg(args) -> RecurrentDepthConfig:
+    return RecurrentDepthConfig(
         vocab_size=32,
         seq_len=64,
         d_model=args.d,
@@ -66,95 +59,69 @@ def main():
         core_linear=args.core_linear,
         exit_gate=args.exit_gate,
     )
-    model = RecurrentDepthLM(cfg)
+
+
+def held_out() -> list[torch.Tensor]:
     src = MarkovSource(vocab=32, seed=0)
-    evals = [src.sample(32, 64) for _ in range(2)]
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-3, betas=(0.9, 0.95))
-    g = torch.Generator().manual_seed(0)
+    src._g.manual_seed(999)
+    return [src.sample(32, 64) for _ in range(2)]
 
-    print(
-        f"1) training {args.steps} steps: depth r ~ log-normal Poisson (mean {cfg.mean_recurrence}), "
-        f"backprop through last {cfg.backprop_depth}" + (", Ouro exit gate" if cfg.exit_gate else "")
-    )
-    with Meter() as train_meter:
-        for step in range(args.steps):
-            loss, info = model.training_loss(src.sample(32, 64), generator=g)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            opt.step()
-            opt.zero_grad(set_to_none=True)
-            if step % max(1, args.steps // 4) == 0 or step == args.steps - 1:
-                print(f"   step {step:4d}  r={info['r']:2d}  loss {loss.item():.3f}", flush=True)
-    model.eval()
 
-    @torch.no_grad()
-    def eval_loss(**kw):
-        tot = 0.0
-        for b in evals:
-            torch.manual_seed(0)
-            tot += F.cross_entropy(model(b[:, :-1], **kw).flatten(0, 1), b[:, 1:].flatten()).item()
-        return tot / len(evals)
+def build(args, meta):
+    return {"lm": RecurrentDepthLM(cfg(args))}
 
-    print("\n2) test-time depth scaling (same weights, more latent iterations)")
-    depth_curve = {}
-    for r in (1, 2, 4, 8, 16, 32):
-        if r > cfg.max_recurrence:
-            break
-        with Meter() as m:
-            depth_curve[r] = eval_loss(num_steps=r)
-        print(f"   r={r:2d}  eval loss {depth_curve[r]:.3f}  ({m.wall_s * 1e3 / len(evals):.0f} ms per 32x63 batch)")
 
-    print(
-        "\n3) adaptive exit: freeze each position once KL(p_i || p_i-1) < 5e-4"
-        + (" (or gate CDF >= 0.5)" if cfg.exit_gate else "")
-    )
-    with torch.no_grad(), Meter() as infer_meter:
+def train_fn(models, args, fab):
+    src = MarkovSource(vocab=32, seed=0)
+    g = torch.Generator().manual_seed(args.seed)
+    rs: list[int] = []
+
+    def loss_fn(model, x):
+        loss, info = model.training_loss(x, generator=g)
+        rs.append(info["r"])
+        return loss, {}
+
+    out = fit(fab, models["lm"], lambda _: src.sample(32, 64), loss_fn, args.steps, lr=1e-3)
+    return {**out, "mean_sampled_depth": sum(rs) / len(rs)}, {}
+
+
+def eval_loss(model, batches, **kw) -> float:
+    tot = 0.0
+    for b in batches:
         torch.manual_seed(0)
-        logp, steps = model.adaptive_forward(evals[0][:, :-1], kl_threshold=5e-4, gate_q=0.5 if cfg.exit_gate else None)
-    ad_loss = F.nll_loss(logp.flatten(0, 1), evals[0][:, 1:].flatten()).item()
-    print(
-        f"   eval loss {ad_loss:.3f}, iterations per position: mean {steps.float().mean():.1f}, "
-        f"min {steps.min().item()}, max {steps.max().item()}  ({infer_meter.wall_s * 1e3:.0f} ms)"
-    )
+        tot += F.cross_entropy(model(b[:, :-1], **kw).flatten(0, 1), b[:, 1:].flatten()).item()
+    return tot / len(batches)
 
-    print("\n4) cost of thinking for one answer token (context T=64, r iterations vs r thinking tokens)")
-    d, T = cfg.d_model, 64
+
+def test_fn(models, args):
+    model, c = models["lm"], cfg(args)
+    curve = {r: eval_loss(model, held_out(), num_steps=r) for r in (1, 2, 4, 8, 16, 32) if r <= c.max_recurrence}
+    return {"held_out_loss_by_depth": curve}
+
+
+def infer_fn(models, args):
+    model, c = models["lm"], cfg(args)
+    x = held_out()[0]
+    torch.manual_seed(0)
+    logp, steps = model.adaptive_forward(x[:, :-1], kl_threshold=5e-4, gate_q=0.5 if c.exit_gate else None)
+    out: dict = {
+        "adaptive_exit_held_out_loss": F.nll_loss(logp.flatten(0, 1), x[:, 1:].flatten()).item(),
+        "adaptive_mean_loops": steps.float().mean().item(),
+        "adaptive_min_max_loops": [steps.min().item(), steps.max().item()],
+    }
+    d, T = c.d_model, 64
     per_block = block_flops_per_token(d, T)
-    fixed = (cfg.n_prelude + cfg.n_coda) * per_block
-    core = cfg.n_core * per_block + 2 * 2 * d * d  # + adapter
-    for r in (4, 16):
-        latent = fixed + r * core
-        # an unlooped model of the same depth would decode r thinking tokens, each a full forward over a growing cache
-        unlooped_depth = cfg.n_prelude + cfg.n_core + cfg.n_coda
-        tokens = sum(unlooped_depth * block_flops_per_token(d, T + j) for j in range(r + 1))
-        print(
-            f"   r={r:2d}: latent loop {latent / 1e6:5.1f} MFLOP, {r} core passes in 1 decode step, 0 extra cache | "
-            f"{r} thinking tokens {tokens / 1e6:5.1f} MFLOP, {r + 1} sequential decode steps, "
-            f"+{r} positions of KV cache ({r * unlooped_depth * 2 * d * 2 / 1024:.1f} KiB FP16)"
-        )
-    print(
-        "   (analytic forward FLOPs. Both routes run r sequential passes, but the loop runs only the core,\n"
-        "    adds no cache and emits nothing; the token route also needs a model trained to produce useful thoughts)"
-    )
+    fixed = (c.n_prelude + c.n_coda) * per_block
+    core = c.n_core * per_block + 2 * 2 * d * d  # + adapter
+    depth = c.n_prelude + c.n_core + c.n_coda
+    for r in (4, 16):  # analytic: r latent loops in one decode step vs r decoded thinking tokens
+        out[f"r{r}_latent_loop_mflop"] = (fixed + r * core) / 1e6
+        out[f"r{r}_thinking_tokens_mflop"] = sum(depth * block_flops_per_token(d, T + j) for j in range(r + 1)) / 1e6
+        out[f"r{r}_thinking_tokens_extra_kv_bytes_fp16"] = r * depth * 2 * d * 2
+    return out
 
-    sizes = size_report(model)
-    print(
-        "METRICS "
-        + json.dumps(
-            {
-                "train_steps": args.steps,
-                **train_meter.as_dict("train_"),
-                **infer_meter.as_dict("infer_adaptive_"),
-                "adaptive_mean_steps": steps.float().mean().item(),
-                "depth_curve": depth_curve,
-                "ram_weights_bytes": sum(p.numel() * p.element_size() for p in model.parameters()),
-                "checkpoint_bytes": state_dict_bytes(model),
-                "stored_bytes": sizes["deployed_total_bytes"],
-                "params": sizes["trainable_params"],
-            }
-        )
-    )
 
+EXAMPLE = Example("06_looped_reasoning_lm", __doc__ or "", add_args, build, train_fn, test_fn, infer_fn)
 
 if __name__ == "__main__":
-    main()
+    run(EXAMPLE)

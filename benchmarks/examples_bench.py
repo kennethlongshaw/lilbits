@@ -1,10 +1,13 @@
-"""Run every example as its own process and report the same dimensions for each: wall time, CPU time
-(user + sys, all threads), CPU utilisation, peak RSS, plus whatever the example measures itself
-(train / inference wall + CPU + peak RSS growth, RAM weights, checkpoint and stored size) via its
-`METRICS {json}` line.
+"""Run every example in three separate processes, train -> test -> infer, and report the same dimensions for each.
 
-Examples default to short smoke runs, so this checks that the code paths work and gives cost
-numbers for them; it is not a quality comparison.
+Every example uses the shared harness (`lilbits.runner`), so each one has `--mode train|test|infer` and a
+checkpoint. Running the phases as separate processes measures each on its own: an inference process never holds
+training state. Per phase this reports the process wall time, CPU time (user + sys, all threads), CPU
+utilisation and peak RSS (from os.wait4 rusage), the harness's own Meter for the phase (wall, CPU, peak RSS growth),
+the example's key metrics, and the deployed size and checkpoint file size.
+
+Examples default to short smoke runs, so this checks that every code path works and gives cost numbers for
+them; it is not a quality comparison.
 
     uv run python benchmarks/examples_bench.py                    # writes results/examples_bench.{json,md}
     uv run python benchmarks/examples_bench.py --only 04
@@ -17,20 +20,24 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUNS = [
+LUT = ["--kernel", "lut"]
+RUNS: list[tuple] = [
     ("01 train+pack, LittleBit", ["examples/01_train_and_pack.py", "--linear", "littlebit"]),
+    ("01 train+pack, LittleBit, LUT kernel", ["examples/01_train_and_pack.py", "--linear", "littlebit"], LUT),
     ("01 train+pack, BitNet", ["examples/01_train_and_pack.py", "--linear", "bitnet"]),
+    ("01 train+pack, BitNet, LUT kernel", ["examples/01_train_and_pack.py", "--linear", "bitnet"], LUT),
     ("01 train+pack, FP", ["examples/01_train_and_pack.py", "--linear", "fp"]),
-    ("02 recurrent mixers", ["examples/02_recurrent_mixers.py"]),
+    ("02 recurrent mixers (stateful LMs)", ["examples/02_recurrent_mixers.py"]),
     ("03 state rollback", ["examples/03_state_rollback.py"]),
     ("04 decision, LittleBit GDN", ["examples/04_decision_model.py", "--linear", "littlebit"]),
     ("04 decision, BitNet GDN", ["examples/04_decision_model.py", "--linear", "bitnet"]),
     ("04 decision, FP GDN", ["examples/04_decision_model.py", "--linear", "fp"]),
     ("04 decision, LittleBit Mamba2", ["examples/04_decision_model.py", "--mixer", "mamba2"]),
-    ("05 pack + Helion (interpret)", ["examples/05_pack_and_helion.py"]),
+    ("05 pack + LUT + Helion (interpret)", ["examples/05_pack_and_helion.py"]),
     ("06 looped LM, FP", ["examples/06_looped_reasoning_lm.py"]),
     ("06 looped LM, LittleBit core", ["examples/06_looped_reasoning_lm.py", "--core-linear", "littlebit"]),
     ("06 looped LM, Ouro exit gate", ["examples/06_looped_reasoning_lm.py", "--exit-gate"]),
@@ -38,6 +45,7 @@ RUNS = [
     ("08 LLM-JEPA (LM / online / EMA / EMA+dropout)", ["examples/08_llm_jepa.py"]),
     ("09 looped index LM (5 stages + decode modes)", ["examples/09_looped_index_lm.py"]),
 ]
+METER_KEYS = ("wall_s", "cpu_s", "cpu_util", "peak_extra_mib")
 
 
 def run(cmd: list[str], env: dict) -> dict:
@@ -49,82 +57,73 @@ def run(cmd: list[str], env: dict) -> dict:
     out = p.stdout.read()
     _, status, ru = os.wait4(p.pid, 0)  # per-child rusage: CPU times and peak RSS of exactly this process
     wall = time.perf_counter() - t0
-    cpu = ru.ru_utime + ru.ru_stime
     metrics = {}
     for line in out.splitlines():
         if line.startswith("METRICS "):
             metrics = json.loads(line[len("METRICS ") :])
+    cpu = ru.ru_utime + ru.ru_stime
     return {
-        "ok": os.waitstatus_to_exitcode(status) == 0,
+        "ok": status == 0 and bool(metrics),
         "wall_s": wall,
         "cpu_s": cpu,
-        "cpu_util": cpu / wall,
+        "cpu_util": cpu / wall if wall else 0.0,
         "peak_rss_mib": ru.ru_maxrss / 1024,
         "metrics": metrics,
         "tail": out.strip().splitlines()[-3:],
     }
 
 
+def _short(v) -> str | None:
+    if isinstance(v, bool) or isinstance(v, int) or isinstance(v, str):
+        return str(v)
+    if isinstance(v, float):
+        return f"{v:.3g}"
+    return None
+
+
+def headline(d: dict, n: int = 3) -> str:
+    """The first n metrics of a phase that aren't the harness's Meter fields; nested dicts show 3 entries."""
+    items = []
+    for k, v in d.items():
+        if k in METER_KEYS:
+            continue
+        if isinstance(v, dict):
+            inner = [f"{a}: {_short(b)}" for a, b in v.items() if _short(b) is not None][:3]
+            if not inner:
+                continue
+            v = "{" + ", ".join(inner) + "}"
+        else:
+            v = _short(v)
+            if v is None:
+                continue
+        items.append(f"{k} = {v}")
+        if len(items) == n:
+            break
+    return "; ".join(items)
+
+
 def table(rows: list[dict]) -> str:
-    f = lambda v, fmt: "" if v is None else fmt.format(v)
-    kib = lambda v: f(v / 1024 if v is not None else None, "{:,.0f} KiB")
     lines = [
-        "| example | ok | process wall | process CPU (util) | process peak RSS | train wall / CPU "
-        "| train peak RSS growth "
-        "| inference (example's own measure) | RAM weights | checkpoint file | stored size |",
-        "|---" * 11 + "|",
+        "| example | phase | ok | process wall / CPU (util) | process peak RSS | phase wall / CPU "
+        "| phase peak RSS growth | key metrics | deployed | checkpoint file |",
+        "|---" * 10 + "|",
     ]
     for r in rows:
-        m = r["metrics"]
-        if "models" in m:  # several models in one example: summarise each
-            infer = "; ".join(
-                f"{k.split(' (')[0]}: {v['bits_per_byte']:.2f} bpb, {v['bytes_per_patch']:.1f} B/patch, "
-                f"train {v['train_wall_s']:.1f}s, infer {v['infer_wall_s'] * 1e3:.0f} ms, "
-                f"{v['stored_bytes'] / 1024:,.0f} KiB"
-                for k, v in m["models"].items()
+        for phase in ("train", "test", "infer"):
+            p = r["phases"].get(phase)
+            if p is None:
+                continue
+            m = p["metrics"]
+            ph = m.get(phase, {})
+            size = m.get("size", {})
+            deployed = sum(v["deployed_bytes"] for v in size.values() if isinstance(v, dict))
+            ckpt = size.get("checkpoint_file_bytes")
+            lines.append(
+                f"| {r['name'] if phase == 'train' else ''} | {phase} | {'✅' if p['ok'] else '❌'} "
+                f"| {p['wall_s']:.1f} s / {p['cpu_s']:.1f} s ({p['cpu_util']:.2f}) | {p['peak_rss_mib']:.0f} MiB "
+                f"| {ph.get('wall_s', 0):.2f} s / {ph.get('cpu_s', 0):.2f} s | {ph.get('peak_extra_mib', 0):.0f} MiB "
+                f"| {headline(ph)} | {deployed / 1024:,.0f} KiB | {'' if ckpt is None else f'{ckpt / 1024:,.0f} KiB'} |"
             )
-        elif "decode" in m:  # looped index LM decode modes
-            infer = "; ".join(
-                f"{k}: {v['decode_wall_s'] * 1e3:.0f} ms, {v['tokens_per_pass']:.1f} tok/pass, "
-                f"{v['mean_loops']:.1f} loops"
-                for k, v in m["decode"].items()
-            )
-        elif "variants" in m:  # LLM-JEPA variants
-            infer = "; ".join(
-                f"{k}: code loss {v['code_loss']:.3f}, retrieval {v['retrieval_top1']:.2f}, "
-                f"train {v['train_wall_s']:.2f}s, infer {v['infer_wall_s'] * 1e3:.0f} ms, "
-                f"EMA copy {v['train_only_ema_bytes'] / 1024:,.0f} KiB"
-                for k, v in m["variants"].items()
-            )
-        elif "ms_per_question_batched" in m:
-            infer = (
-                f"{m['prefill_ms_per_state']:.1f} ms prefill / state, {m['ms_per_question_batched']:.2f} ms / question"
-            )
-        elif "adaptive_mean_steps" in m:
-            infer = (
-                f"adaptive exit: {m['adaptive_mean_steps']:.1f} loops / position, "
-                f"{m['infer_adaptive_wall_s'] * 1e3:.0f} ms per 32×63 batch"
-            )
-        elif "infer_torch_wall_s" in m:
-            infer = (
-                f"eval + generate: torch {m['infer_torch_wall_s']:.2f} s, Helion (interpret) "
-                f"{m['infer_helion_wall_s']:.2f} s wall"
-            )
-        elif "infer_ms_per_batch" in m:
-            infer = f"{m['infer_ms_per_batch']:.1f} ms wall, {m['infer_cpu_ms_per_batch']:.1f} ms CPU per 32×63 batch"
-        else:
-            infer = ""
-        train = (
-            f"{m['train_wall_s']:.1f} s / {m['train_cpu_s']:.1f} s ({m['train_steps']} steps)"
-            if "train_wall_s" in m
-            else ""
-        )
-        lines.append(
-            f"| {r['name']} | {'✅' if r['ok'] else '❌'} | {r['wall_s']:.1f} s "
-            f"| {r['cpu_s']:.1f} s ({r['cpu_util']:.2f}) "
-            f"| {r['peak_rss_mib']:.0f} MiB | {train} | {f(m.get('train_peak_extra_mib'), '{:.0f} MiB')} | {infer} "
-            f"| {kib(m.get('ram_weights_bytes'))} | {kib(m.get('checkpoint_bytes'))} | {kib(m.get('stored_bytes'))} |"
-        )
     return "\n".join(lines)
 
 
@@ -136,18 +135,25 @@ def main(argv=None):
     args = ap.parse_args(argv)
     env = dict(os.environ, OMP_NUM_THREADS=str(args.threads), MKL_NUM_THREADS=str(args.threads), HELION_INTERPRET="1")
     rows = []
-    for name, cmd in RUNS:
-        if args.only and not name.startswith(args.only):
-            continue
-        r = {"name": name, "cmd": cmd, **run(cmd, env)}
-        rows.append(r)
-        print(
-            f"{name}: {'ok' if r['ok'] else 'FAILED'}  {r['wall_s']:.1f}s wall  {r['cpu_s']:.1f}s CPU  "
-            f"{r['peak_rss_mib']:.0f} MiB peak",
-            flush=True,
-        )
-        if not r["ok"]:
-            print("   " + "\n   ".join(r["tail"]))
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, (name, cmd, *extra) in enumerate(RUNS):
+            if args.only and not name.startswith(args.only):
+                continue
+            ckpt = os.path.join(tmp, f"run{i}.pt")
+            phases = {}
+            for phase in ("train", "test", "infer"):
+                flags = ["--mode", phase, "--ckpt", ckpt, "--threads", str(args.threads)]
+                runtime = extra[0] if extra and phase != "train" else []
+                p = phases[phase] = run([*cmd, *flags, *runtime], env)
+                print(
+                    f"{name} [{phase}]: {'ok' if p['ok'] else 'FAILED'}  {p['wall_s']:.1f}s wall  "
+                    f"{p['cpu_s']:.1f}s CPU  {p['peak_rss_mib']:.0f} MiB peak",
+                    flush=True,
+                )
+                if not p["ok"]:
+                    print("   " + "\n   ".join(p["tail"]))
+                    break
+            rows.append({"name": name, "cmd": cmd, "phases": phases})
     md = table(rows)
     print(md)
     os.makedirs(os.path.dirname(os.path.join(ROOT, args.out)), exist_ok=True)

@@ -539,7 +539,7 @@ The repo has three layers:
     `tune.py` (`lb-tune`, Optuna)
   - `data.py`: Markov source with a known entropy floor, and a char-level text source
   - `measure.py`: `Meter` (wall, CPU and peak RSS for any code block), `size_report`, `state_dict_bytes`
-- **`examples/`** shows how to use the primitives. Each one defaults to a short smoke run and prints a `METRICS` line (see `examples/README.md`).
+- **`examples/`** shows how to use the primitives. Each one has `--mode train | test | infer | all` on a shared Lightning Fabric harness (`lilbits.runner`) with checkpoints, defaults to a short smoke run, and prints a `METRICS` line (see `examples/README.md`).
 - **`benchmarks/`** runs examples, or the same primitives side by side. Every benchmark reports quality, stored size, RAM, peak RSS, and CPU and wall time for both training and inference.
   - `examples_bench.py`: every example in its own process, with per-process rusage plus the example's own metrics
   - `compare.py`: LittleBit vs BitNet vs FP16 at matched size, training and inference

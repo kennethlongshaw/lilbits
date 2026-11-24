@@ -112,6 +112,10 @@ def size_report(model: nn.Module) -> dict:
             q_params |= {id(p) for p in m.parameters()}
             q_bits += m.storage_bits()
             q_dense += m.in_features * m.out_features
+        elif hasattr(m, "storage_bytes") and hasattr(m, "in_features"):  # packed / LUT inference layers
+            q_params |= {id(p) for p in m.parameters()}
+            q_bits += 8 * m.storage_bytes()
+            q_dense += m.in_features * m.out_features
         elif isinstance(m, nn.Linear) and name.startswith("blocks."):
             fp_lin_params.add(id(m.weight))
             fp_lin_dense += m.weight.numel()

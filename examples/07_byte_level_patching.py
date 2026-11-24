@@ -11,8 +11,11 @@ runs on a sequence several times shorter than the byte stream.
     Baseline: a plain byte-level transformer of similar width (every byte goes through the whole network).
 
 The corpus is this repo's own Markdown/Python files (no download). Default is a short smoke run that proves the
-code works; raise --steps to train. Reports bits per byte, bytes per patch (the compression of the inner
-sequence), and for each model train/infer wall, CPU, peak RSS, parameters, checkpoint and stored size.
+code works; raise --steps to train.
+
+    train   the byte baseline, BLT's entropy model then BLT, and H-Net, each on Lightning Fabric (per-model cost)
+    test    bits per byte, bytes per patch (how much shorter the inner sequence is), inner sequence length
+    infer   forward latency for 16 x seq bytes per model, including BLT's entropy patching pass
 
     uv run python examples/07_byte_level_patching.py
     uv run python examples/07_byte_level_patching.py --latent-linear littlebit   # sub-1-bit inner network
@@ -20,18 +23,16 @@ sequence), and for each model train/infer wall, CPU, peak RSS, parameters, check
 
 from __future__ import annotations
 
-import argparse
 import glob
-import json
 import math
 import os
-from typing import Any
+import time
 
 import torch
 import torch.nn.functional as F
 
 from lilbits.data import ByteSource
-from lilbits.measure import Meter, size_report, state_dict_bytes
+from lilbits.measure import Meter
 from lilbits.models.byte_latent import (
     BLTConfig,
     ByteLatentTransformer,
@@ -41,6 +42,7 @@ from lilbits.models.byte_latent import (
     entropy_boundaries,
 )
 from lilbits.models.tinylm import Config, TinyLM
+from lilbits.runner import Example, fit, run
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -49,59 +51,23 @@ def bits_per_byte(logits, x):
     return F.cross_entropy(logits[:, :-1].flatten(0, 1), x[:, 1:].flatten()).item() / math.log(2)
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def add_args(ap):
     ap.add_argument("--steps", type=int, default=30, help="training steps per model (default: smoke run)")
     ap.add_argument("--seq", type=int, default=256)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--target-bytes-per-patch", type=float, default=4.0)
     ap.add_argument("--latent-linear", default="fp", choices=["fp", "littlebit", "bitnet"])
-    ap.add_argument("--threads", type=int, default=1)
-    args = ap.parse_args()
-    torch.manual_seed(0)
-    torch.set_num_threads(args.threads)
-    files = sorted(
+
+
+def files() -> list[str]:
+    return sorted(
         glob.glob(os.path.join(ROOT, "**", "*.md"), recursive=True)
         + glob.glob(os.path.join(ROOT, "src", "**", "*.py"), recursive=True)
     )
-    src = ByteSource(files)
-    test = ByteSource(files, seed=1).sample(16, args.seq)
-    print(f"corpus: {len(src.data):,} bytes from {len(files)} repo files; seq {args.seq} bytes\n")
-    T, B = args.seq, args.batch
 
-    def fit(name, model, loss_fn, extra_params=()):
-        opt = torch.optim.AdamW(list(model.parameters()) + list(extra_params), lr=2e-3, betas=(0.9, 0.95))
-        with Meter() as m:
-            for _ in range(args.steps):
-                loss = loss_fn(src.sample(B, T)[:, :T])
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                opt.step()
-                opt.zero_grad(set_to_none=True)
-        return m
 
-    rows: dict[str, dict[str, Any]] = {}
-
-    # 1) byte-level baseline: every byte through every layer
-    base = TinyLM(Config(vocab_size=256, seq_len=T, d_model=128, n_heads=4, n_layers=3))
-    lm = lambda model: lambda x: F.cross_entropy(model(x[:, :-1]).flatten(0, 1), x[:, 1:].flatten())
-    tm = fit("baseline", base, lm(base))
-    base.eval()
-    with torch.no_grad(), Meter() as im:
-        bpb = bits_per_byte(F.pad(base(test[:, : T - 1]), (0, 0, 0, 1)), test[:, :T])
-    rows["byte transformer (no patching)"] = dict(model=base, bpb=bpb, bpp=1.0, inner_len=T, train=tm, infer=im)
-
-    # 2) BLT: stage 1 a tiny byte LM for entropies, stage 2 the patched model
-    ent_model = TinyLM(Config(vocab_size=256, seq_len=T, d_model=48, n_heads=2, n_layers=1))
-    tm_ent = fit("entropy", ent_model, lm(ent_model))
-    ent_model.eval()
-    with torch.no_grad():
-        h = byte_entropy(ent_model, src.sample(64, T)[:, :T])
-    theta = torch.quantile(h.flatten(), 1 - 1 / args.target_bytes_per_patch).item()  # ~1 boundary per N bytes
-
-    def patches(x):
-        return entropy_boundaries(byte_entropy(ent_model, x), theta_global=theta, max_patch=16)
-
+def build(args, meta):
+    T = args.seq
     blt = ByteLatentTransformer(
         BLTConfig(
             seq_len=T,
@@ -115,26 +81,7 @@ def main():
             linear=args.latent_linear,
         )
     )
-    tm_blt = fit(
-        "blt", blt, lambda x: F.cross_entropy(blt(x[:, :-1], patches(x[:, :-1])).flatten(0, 1), x[:, 1:].flatten())
-    )
-    tm_blt.wall_s += tm_ent.wall_s  # count the entropy model's training too
-    tm_blt.cpu_s += tm_ent.cpu_s
-    blt.eval()
-    with torch.no_grad(), Meter() as im:
-        bnd = patches(test[:, :T])
-        bpb = bits_per_byte(blt(test[:, :T], bnd), test[:, :T])
-    rows["BLT (entropy patches)"] = dict(
-        model=blt,
-        extra=ent_model,
-        bpb=bpb,
-        bpp=bnd.numel() / bnd.sum().item(),
-        inner_len=int(bnd.sum(1).float().mean()),
-        train=tm_blt,
-        infer=im,
-    )
-
-    # 3) H-Net: chunk boundaries learned end to end
+    blt.theta = meta.get("theta", 0.0)  # entropy threshold, fixed after the entropy model is trained
     hnet = HNet(
         HNetConfig(
             seq_len=T,
@@ -146,52 +93,101 @@ def main():
             linear=args.latent_linear,
         )
     )
+    return {
+        "baseline": TinyLM(Config(vocab_size=256, seq_len=T, d_model=128, n_heads=4, n_layers=3)),
+        "entropy": TinyLM(Config(vocab_size=256, seq_len=T, d_model=48, n_heads=2, n_layers=1)),
+        "blt": blt,
+        "hnet": hnet,
+    }
 
-    def hnet_loss(x):
-        logits, ratio, _ = hnet(x[:, :-1])
-        return F.cross_entropy(logits.flatten(0, 1), x[:, 1:].flatten()) + hnet.cfg.ratio_weight * ratio
 
-    tm_h = fit("hnet", hnet, hnet_loss)
-    hnet.eval()
-    with torch.no_grad(), Meter() as im:
-        logits, _, st = hnet(test[:, :T])
-        bpb = bits_per_byte(logits, test[:, :T])
-    rows["H-Net (learned chunks)"] = dict(
-        model=hnet, bpb=bpb, bpp=st["bytes_per_chunk"], inner_len=st["chunks"], train=tm_h, infer=im
-    )
+def lm_loss(model, x):
+    return F.cross_entropy(model(x[:, :-1]).flatten(0, 1), x[:, 1:].flatten()), {}
 
-    print(
-        f"| model | bits/byte | bytes per patch | inner sequence (of {T}) | params | train wall / CPU | "
-        f"train peak RSS | infer wall (16×{T}) | checkpoint | stored |"
-    )
-    print("|---|---|---|---|---|---|---|---|---|---|")
-    metrics = {}
-    for name, r in rows.items():
-        mods = [r["model"]] + ([r["extra"]] if "extra" in r else [])
-        params = sum(p.numel() for mod in mods for p in mod.parameters())
-        ckpt = sum(state_dict_bytes(mod) for mod in mods)
-        stored = sum(size_report(mod)["deployed_total_bytes"] for mod in mods)
-        print(
-            f"| {name} | {r['bpb']:.2f} | {r['bpp']:.1f} | {r['inner_len']} | {params:,} | "
-            f"{r['train'].wall_s:.1f} s / {r['train'].cpu_s:.1f} s | {r['train'].peak_extra_mib:.0f} MiB | "
-            f"{r['infer'].wall_s * 1e3:.0f} ms | {ckpt / 1024:,.0f} KiB | {stored / 1024:,.0f} KiB |"
-        )
-        metrics[name] = {
-            "bits_per_byte": r["bpb"],
-            "bytes_per_patch": r["bpp"],
-            "params": params,
-            **r["train"].as_dict("train_"),
-            **r["infer"].as_dict("infer_"),
-            "checkpoint_bytes": ckpt,
-            "stored_bytes": stored,
-        }
-    d = 128
-    print(
-        f"\nfor scale: a 200k-token vocabulary needs {2 * 200_000 * d:,} embedding + head params at d={d}; "
-        f"bytes need {2 * 256 * d:,}."
-    )
-    print("METRICS " + json.dumps({"train_steps": args.steps, "models": metrics}))
 
+def patches(models, x):
+    return entropy_boundaries(byte_entropy(models["entropy"], x), theta_global=models["blt"].theta, max_patch=16)
+
+
+def train_fn(models, args, fab):
+    src = ByteSource(files())
+    T, B = args.seq, args.batch
+    batch = lambda _: src.sample(B, T)[:, :T]
+    out = {}
+    for name in ("baseline", "entropy"):
+        with Meter() as m:
+            fit(fab, models[name], batch, lm_loss, args.steps, lr=2e-3)
+        out[name] = m.as_dict()
+    with torch.no_grad():
+        h = byte_entropy(models["entropy"].eval(), src.sample(64, T)[:, :T])
+    theta = torch.quantile(h.flatten(), 1 - 1 / args.target_bytes_per_patch).item()  # ~1 boundary per N bytes
+    models["blt"].theta = theta
+
+    def blt_loss(model, x):
+        with torch.no_grad():
+            bnd = patches(models, x[:, :-1])
+        return F.cross_entropy(model(x[:, :-1], bnd).flatten(0, 1), x[:, 1:].flatten()), {}
+
+    def hnet_loss(model, x):
+        logits, ratio, _ = model(x[:, :-1])
+        return F.cross_entropy(logits.flatten(0, 1), x[:, 1:].flatten()) + models["hnet"].cfg.ratio_weight * ratio, {}
+
+    for name, fn in (("blt", blt_loss), ("hnet", hnet_loss)):
+        with Meter() as m:
+            fit(fab, models[name], batch, fn, args.steps, lr=2e-3)
+        out[name] = m.as_dict()
+    return {"steps_per_model": args.steps, "per_model": out}, {"theta": theta}
+
+
+def test_batch(args) -> torch.Tensor:
+    return ByteSource(files(), seed=1).sample(16, args.seq)[:, : args.seq]
+
+
+def test_fn(models, args):
+    x, T = test_batch(args), args.seq
+    out = {}
+    out["byte transformer"] = {
+        "bits_per_byte": bits_per_byte(F.pad(models["baseline"](x[:, : T - 1]), (0, 0, 0, 1)), x),
+        "bytes_per_patch": 1.0,
+        "inner_len": T,
+    }
+    bnd = patches(models, x)
+    out["BLT"] = {
+        "bits_per_byte": bits_per_byte(models["blt"](x, bnd), x),
+        "bytes_per_patch": bnd.numel() / bnd.sum().item(),
+        "inner_len": bnd.sum(1).float().mean().item(),
+    }
+    logits, _, st = models["hnet"](x)
+    out["H-Net"] = {
+        "bits_per_byte": bits_per_byte(logits, x),
+        "bytes_per_patch": st["bytes_per_chunk"],
+        "inner_len": st["chunks"],
+    }
+    return out
+
+
+def infer_fn(models, args):
+    x, T = test_batch(args), args.seq
+
+    def ms(f):
+        f()
+        t = time.perf_counter()
+        for _ in range(3):
+            f()
+        return (time.perf_counter() - t) / 3 * 1e3
+
+    return {
+        "ms_per_16xseq": {
+            "byte transformer": ms(lambda: models["baseline"](x[:, : T - 1])),
+            "BLT (incl. entropy patching)": ms(lambda: models["blt"](x, patches(models, x))),
+            "H-Net": ms(lambda: models["hnet"](x)),
+        },
+        "embedding_params_bytes_vocab": 256 * 128 * 2,
+        "embedding_params_200k_vocab_at_d128": 2 * 200_000 * 128,
+    }
+
+
+EXAMPLE = Example("07_byte_level_patching", __doc__ or "", add_args, build, train_fn, test_fn, infer_fn)
 
 if __name__ == "__main__":
-    main()
+    run(EXAMPLE)
