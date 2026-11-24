@@ -296,6 +296,34 @@ so single-token decode is ~13× slower than dense at 1 bpw and ~1.2× slower at 
 unpack amortizes (0.55 bpw: 1.8× faster, 0.1 bpw: 7× faster than dense for 2,048 tokens). A real kernel
 would unpack in registers and turn the 32× smaller weight reads into decode speed.
 
+## Helion kernel for packed inference (`backend="helion"`, `uv run lb-gpu-bench`)
+
+`src/littlebit_scratch/helion_kernels.py` has two [Helion](https://pytorch.org/blog/helion/) kernels that
+run a packed layer straight from the 1-bit storage, unpacking bits inside each tile (no unpacked weight
+ever hits memory):
+
+- `littlebit_down`: `zp[j, m, b] = l[8b+j] · Σ_k (x·g)[m, k] · sign_bit_j(Vb[k, b])`
+- `littlebit_up`: `y[m, n] = y_in[m, n] + h[n] · Σ_b Σ_j zp[j, m, b] · sign_bit_j(Ub[n, b])`
+
+The rank activation is kept as 8 bit planes (`zp[j]` = rank columns j, 8+j, ...), so each byte tile is
+loaded once and shifted 8 times; no tile reshapes. Padding bits get `l = 0`. Residual paths are two launches
+each, accumulating into `y`.
+
+```bash
+uv sync --extra gpu                  # installs helion (+ triton)
+pack_model(model, backend="helion")  # or set_backend(model, "helion") on an already packed model
+uv run lb-gpu-bench                  # FP16 nn.Linear vs packed torch vs packed Helion, 4096-wide layers
+```
+
+On first use per shape Helion picks the fastest of 4 candidate configs per kernel; `LB_HELION_AUTOTUNE=1`
+runs Helion's full autotuner instead (~minutes per shape; it prints a config you can hardcode).
+
+**Status: not yet run on a GPU** (this was built in a CPU-only sandbox). What's verified: Triton code
+generates for every candidate config, and in Helion's eager reference mode on CPU (`HELION_INTERPRET=1`)
+the kernels match the PyTorch packed layer to ~1e-6, for single layers and a whole packed TinyLM
+(`tests/test_helion.py`). Speed is unmeasured. Likely next tuning steps once it runs: feed `tl.dot` FP16/BF16
+operands instead of FP32 (±1 is exact in FP16), and fuse the two residual paths into one launch.
+
 ## Layout
 
 - `src/littlebit_scratch/littlebit.py`: `LittleBitLinear`, STEs, bpw accounting
@@ -306,6 +334,8 @@ would unpack in registers and turn the 32× smaller weight reads into decode spe
 - `src/littlebit_scratch/infer_bench.py`: `lb-infer-bench`, inference speed vs nn.Linear
 - `src/littlebit_scratch/packed.py`: bit-packed inference export
 - `src/littlebit_scratch/mem_bench.py`: `lb-mem-bench`, inference memory/speed of FP vs cached vs packed
+- `src/littlebit_scratch/helion_kernels.py`: Helion kernels for packed inference
+- `src/littlebit_scratch/gpu_bench.py`: `lb-gpu-bench`, GPU speed of dense vs packed torch vs packed Helion
 - `src/littlebit_scratch/bench.py`: `lb-bench`, FP vs LittleBit size/loss/time/memory comparison
 - `results/`: logs from the comparison runs above
 - `tests/`: layer math, STE gradients, bpw budget, causality, SVD/ITQ init, and from-scratch training smoke tests

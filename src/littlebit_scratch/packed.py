@@ -55,8 +55,14 @@ def unpack_signs(packed: torch.Tensor, r: int, dtype=torch.float32) -> torch.Ten
 
 
 class PackedLittleBitLinear(nn.Module):
-    def __init__(self, layer: LittleBitLinear, chunk: int = 128):
+    """backend: "torch" (chunked unpack + matmul, any device) or "helion" (fused kernels,
+    see helion_kernels.py; CUDA, or CPU with HELION_INTERPRET=1 for correctness checks)."""
+
+    backend: str = "torch"
+
+    def __init__(self, layer: LittleBitLinear, chunk: int = 128, backend: str = "torch"):
         super().__init__()
+        self.backend = backend
         assert chunk % 8 == 0
         self.in_features, self.out_features, self.rank = layer.in_features, layer.out_features, layer.rank
         self.paths = len(layer.paths)
@@ -74,6 +80,7 @@ class PackedLittleBitLinear(nn.Module):
         """Allocate an unfilled packed layer (for load_state_dict) without building FP32 latents."""
         self = cls.__new__(cls)
         nn.Module.__init__(self)
+        self.backend = "torch"
         self.in_features, self.out_features, self.rank, self.paths, self.chunk = in_features, out_features, rank, paths, chunk
         nb = (rank + 7) // 8
         self.register_buffer("U_bits", torch.zeros(paths, out_features, nb, dtype=torch.uint8))
@@ -84,7 +91,18 @@ class PackedLittleBitLinear(nn.Module):
         self.register_buffer("bias", torch.zeros(out_features, dtype=torch.half) if bias else None)
         return self
 
+    def _l8(self, i: int, nb: int) -> torch.Tensor:
+        cache = self.__dict__.setdefault("_l8_cache", {})
+        key = (i, self.l.device)
+        if key not in cache:
+            from .helion_kernels import l_planes
+            cache[key] = l_planes(self.l[i], nb)
+        return cache[key]
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.backend == "helion":
+            from .helion_kernels import packed_forward
+            return packed_forward(self, x)
         # Scales are folded into each small unpacked chunk (never into activations), and the
         # output accumulates in place, so the only activation-sized tensor is y itself.
         dt = x.dtype
@@ -114,14 +132,21 @@ class PackedLittleBitLinear(nn.Module):
 
 
 @torch.no_grad()
-def pack_model(model: nn.Module, chunk: int = 128) -> nn.Module:
+def pack_model(model: nn.Module, chunk: int = 128, backend: str = "torch") -> nn.Module:
     """In place: swap LittleBitLinear -> PackedLittleBitLinear (drops FP32 latents). Returns model in eval mode."""
     for name, child in list(model.named_children()):
         if isinstance(child, LittleBitLinear):
-            setattr(model, name, PackedLittleBitLinear(child, chunk))
+            setattr(model, name, PackedLittleBitLinear(child, chunk, backend))
         else:
-            pack_model(child, chunk)
+            pack_model(child, chunk, backend)
     return model.eval()
+
+
+def set_backend(model: nn.Module, backend: str) -> nn.Module:
+    for m in model.modules():
+        if isinstance(m, PackedLittleBitLinear):
+            m.backend = backend
+    return model
 
 
 def model_bytes(model: nn.Module) -> int:
