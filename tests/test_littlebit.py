@@ -117,3 +117,33 @@ def test_fused_forward_matches_reference_including_grads(residual, ste):
     torch.testing.assert_close(y_fused, y_ref, rtol=1e-4, atol=1e-5)
     for a, b in zip(g_fused, g_ref):
         torch.testing.assert_close(a, b, rtol=1e-3, atol=1e-4)
+
+
+@pytest.mark.parametrize("rank", [2, 30])  # low-rank path and dense fallback
+def test_inference_cache_matches_training_forward(rank):
+    torch.manual_seed(0)
+    layer = LittleBitLinear(32, 48, rank=rank, residual=True, bias=True)
+    x = torch.randn(4, 32)
+    y_train = layer(x).detach()
+    layer.eval()
+    with torch.no_grad():
+        y_inf = layer(x)
+        assert layer._infer_cache[0] == ("dense" if rank == 30 else "lowrank")
+    torch.testing.assert_close(y_inf, y_train, rtol=1e-4, atol=1e-5)
+
+
+def test_inference_cache_cleared_when_training_resumes():
+    torch.manual_seed(0)
+    layer = LittleBitLinear(16, 16, rank=4)
+    x = torch.randn(2, 16)
+    layer.eval()
+    with torch.no_grad():
+        layer(x)
+    assert layer._infer_cache is not None
+    layer.train()
+    assert layer._infer_cache is None
+    with torch.no_grad():
+        layer.paths[0].h.mul_(2)
+    layer.eval()
+    with torch.no_grad():
+        torch.testing.assert_close(layer(x), layer.forward_reference(x), rtol=1e-4, atol=1e-5)

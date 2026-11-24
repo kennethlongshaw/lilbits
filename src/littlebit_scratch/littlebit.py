@@ -198,6 +198,7 @@ class LittleBitLinear(nn.Module):
         itq_iters: int = 0,
     ):
         super().__init__()
+        self._infer_cache: tuple | None = None
         paths = 2 if residual else 1
         if rank is None:
             if bpw is None:
@@ -226,6 +227,7 @@ class LittleBitLinear(nn.Module):
     @torch.no_grad()
     def init_from_weight(self, W: torch.Tensor, itq_iters: int = 0, match_norm: bool = False) -> None:
         """Initialize all paths from a dense weight; each residual path fits what's left."""
+        self._infer_cache = None
         target = W.float()
         for p in self.paths:
             p.init_from_weight(target, itq_iters)
@@ -249,7 +251,32 @@ class LittleBitLinear(nn.Module):
             return A[0], B[0]
         return torch.cat(A, dim=1), torch.cat(B, dim=1)
 
+    def train(self, mode: bool = True):
+        self._infer_cache = None  # weights may change once training resumes
+        return super().train(mode)
+
+    @torch.no_grad()
+    def _inference_weights(self):
+        """Build once per eval() session: the fixed +-1 factors with scales folded in.
+
+        If the low-rank pair costs more MACs than a dense matmul (R*(in+out) >= in*out),
+        multiply them out into one dense matrix instead.
+        """
+        if self._infer_cache is None:
+            A, B = self.factors()
+            R = A.shape[1]
+            if R * (self.in_features + self.out_features) >= self.in_features * self.out_features:
+                self._infer_cache = ("dense", (B @ A.t()).contiguous())
+            else:
+                self._infer_cache = ("lowrank", A.t().contiguous(), B.contiguous())
+        return self._infer_cache
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training and not torch.is_grad_enabled():
+            cache = self._inference_weights()
+            if cache[0] == "dense":
+                return F.linear(x, cache[1], self.bias)
+            return F.linear(F.linear(x, cache[1]), cache[2], self.bias)
         A, B = self.factors()
         return F.linear(F.linear(x, A.t()), B, self.bias)
 

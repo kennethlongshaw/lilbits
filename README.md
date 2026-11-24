@@ -248,6 +248,26 @@ Notes:
 - Inference time uses the same unpacked FP32 forward, not a bit-packed kernel, so it says nothing about deployed speed.
 - The FP warm-start row's train-state line covers only the LittleBit phase; its FP phase needs the baseline's.
 
+## Inference speed (`uv run lb-infer-bench`)
+
+In `eval()` + `no_grad`, `LittleBitLinear` now builds its scale-folded ±1 factors once and caches them
+(cleared on `.train()` / re-init), so inference is just `x @ A @ Bᵀ`. If the low-rank pair would cost more
+MACs than a dense matmul, it multiplies them out into one dense matrix instead. Before this, every inference
+call re-binarized the latents and rebuilt the factors, which is what made LittleBit look slow.
+
+Full CPU output (4 threads): `results/infer_bench_cpu.md`. Highlights:
+
+- TinyLM (d_model 128), batch 32×64: FP 8.95 ms; LittleBit 1.41 bpw 16.6 → 9.5 ms; 1.0 bpw 11.2 → 7.7 ms.
+  Single-token: FP 0.29 ms; LittleBit 3.6 → 0.34 ms. At width 128 and ~1.4 bpw the rank is close to
+  break-even, so parity is the best possible.
+- Single layers at real widths: speed tracks MACs. ~1 bpw ≈ dense rank, so ≈1× speed; 0.55 bpw ≈ 1.7-2.7×;
+  0.1 bpw ≈ 7-21× (4096×4096: 0.83 → 0.039 ms per token, 116 → 14 ms for 2,048 tokens).
+
+These are FP32 cached factors, i.e. the speedup comes only from the low rank. A bit-packed kernel (1-bit
+factors, which is how the paper deploys) would also cut weight memory traffic ~32×, which should help most in
+memory-bound batch-1 decoding, especially on GPU. Not implemented here. The FP32 cache also means inference
+RAM for the factors is rank·(in+out)·4 bytes, not the packed size in the tables above.
+
 ## Layout
 
 - `src/littlebit_scratch/littlebit.py`: `LittleBitLinear`, STEs, bpw accounting
@@ -255,6 +275,7 @@ Notes:
 - `src/littlebit_scratch/data.py`: Markov source with known entropy floor, char-level text source
 - `src/littlebit_scratch/train.py`: training loop / `lb-train` CLI
 - `src/littlebit_scratch/optim.py`: DeepSeek-V4-style Muon (hybrid Newton-Schulz)
+- `src/littlebit_scratch/infer_bench.py`: `lb-infer-bench`, inference speed vs nn.Linear
 - `src/littlebit_scratch/bench.py`: `lb-bench`, FP vs LittleBit size/loss/time/memory comparison
 - `results/`: logs from the comparison runs above
 - `tests/`: layer math, STE gradients, bpw budget, causality, SVD/ITQ init, and from-scratch training smoke tests
