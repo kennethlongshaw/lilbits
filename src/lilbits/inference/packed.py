@@ -2,7 +2,7 @@
 
 `pack_model(model)` replaces every LittleBitLinear with a PackedLittleBitLinear that stores
 - sign(U), sign(V) as 1 bit each, packed 8 per byte (uint8), per path
-- h, g, l as FP16
+- h, g, l as FP16, or as INT8 with one FP16 step per vector when the layer was trained with scale_bits=8
 and drops the FP32 latent factors. This matches the storage the paper (and our bpw numbers) assume.
 
 The forward unpacks signs in rank chunks (default 128 columns), so the only transient memory is
@@ -20,7 +20,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from lilbits.layers.littlebit import LittleBitLinear
+from lilbits.layers.littlebit import LittleBitLinear, int8_absmax
 
 _SHIFTS = torch.arange(8, dtype=torch.uint8)
 
@@ -54,6 +54,36 @@ def unpack_signs(packed: torch.Tensor, r: int, dtype=torch.float32) -> torch.Ten
     return out.view(packed.shape[0], -1)[:, :r]
 
 
+def set_scales(m: nn.Module, h: torch.Tensor, g: torch.Tensor, l: torch.Tensor, scale_bits: int) -> None:
+    """Store (P, n) scale stacks on a packed layer. FP16: buffers h, g, l. INT8: persistent h_q / h_s ... buffers,
+    and h, g, l as non-persistent FP16 dequantized copies that compute paths read (rebuilt after load_state_dict)."""
+    m.scale_bits = scale_bits
+    if scale_bits >= 16:
+        for n, t in (("h", h), ("g", g), ("l", l)):
+            m.register_buffer(n, t.detach().half().clone())
+        return
+    for n, t in (("h", h), ("g", g), ("l", l)):
+        q, s = int8_absmax(t.detach().float())
+        m.register_buffer(f"{n}_q", q)
+        m.register_buffer(f"{n}_s", s)
+    refresh_scales(m)
+    if not getattr(m, "_scale_hook", False):
+        m.register_load_state_dict_post_hook(lambda mod, _keys: refresh_scales(mod))
+        m._scale_hook = True
+
+
+def refresh_scales(m: nn.Module) -> None:
+    for n in ("h", "g", "l"):
+        q, s = getattr(m, f"{n}_q"), getattr(m, f"{n}_s")
+        m.register_buffer(n, (q.float() * s.float()).half(), persistent=False)
+    m.__dict__.pop("_f32", None)
+    m.__dict__.pop("_l8_cache", None)
+
+
+def persistent_bytes(m: nn.Module) -> int:
+    return sum(t.numel() * t.element_size() for t in m.state_dict().values())
+
+
 class PackedLittleBitLinear(nn.Module):
     """backend: "torch" (chunked unpack + matmul, any device) or "helion" (fused kernels,
     see helion_kernels.py; CUDA, or CPU with HELION_INTERPRET=1 for correctness checks)."""
@@ -76,13 +106,20 @@ class PackedLittleBitLinear(nn.Module):
         with torch.no_grad():
             self.register_buffer("U_bits", torch.stack([pack_signs(p.U) for p in layer.paths]))  # P, out, r/8
             self.register_buffer("V_bits", torch.stack([pack_signs(p.V) for p in layer.paths]))  # P, in, r/8
-            self.register_buffer("h", torch.stack([p.h for p in layer.paths]).half())
-            self.register_buffer("g", torch.stack([p.g for p in layer.paths]).half())
-            self.register_buffer("l", torch.stack([p.l for p in layer.paths]).half())
+            set_scales(self, *(torch.stack([getattr(p, n) for p in layer.paths]) for n in "hgl"), layer.scale_bits)
             self.register_buffer("bias", None if layer.bias is None else layer.bias.detach().half())
 
     @classmethod
-    def empty(cls, in_features: int, out_features: int, rank: int, paths: int, bias: bool = False, chunk: int = 128):
+    def empty(
+        cls,
+        in_features: int,
+        out_features: int,
+        rank: int,
+        paths: int,
+        bias: bool = False,
+        chunk: int = 128,
+        scale_bits: int = 16,
+    ):
         """Allocate an unfilled packed layer (for load_state_dict) without building FP32 latents."""
         self = cls.__new__(cls)
         nn.Module.__init__(self)
@@ -97,9 +134,13 @@ class PackedLittleBitLinear(nn.Module):
         nb = (rank + 7) // 8
         self.register_buffer("U_bits", torch.zeros(paths, out_features, nb, dtype=torch.uint8))
         self.register_buffer("V_bits", torch.zeros(paths, in_features, nb, dtype=torch.uint8))
-        self.register_buffer("h", torch.zeros(paths, out_features, dtype=torch.half))
-        self.register_buffer("g", torch.zeros(paths, in_features, dtype=torch.half))
-        self.register_buffer("l", torch.zeros(paths, rank, dtype=torch.half))
+        set_scales(
+            self,
+            torch.zeros(paths, out_features),
+            torch.zeros(paths, in_features),
+            torch.zeros(paths, rank),
+            scale_bits,
+        )
         self.register_buffer("bias", torch.zeros(out_features, dtype=torch.half) if bias else None)
         return self
 
@@ -138,7 +179,7 @@ class PackedLittleBitLinear(nn.Module):
         return y.view(*lead, self.out_features)
 
     def storage_bytes(self) -> int:
-        return sum(b.numel() * b.element_size() for b in self.buffers())
+        return persistent_bytes(self)
 
     def extra_repr(self) -> str:
         return (

@@ -37,7 +37,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from lilbits.inference.packed import PackedLittleBitLinear, unpack_signs
+from lilbits.inference.packed import PackedLittleBitLinear, persistent_bytes, set_scales, unpack_signs
 from lilbits.layers.bitnet import BitLinear, PackedBitLinear, act_quant
 from lilbits.layers.littlebit import LittleBitLinear
 
@@ -187,18 +187,16 @@ class LUTLittleBitLinear(nn.Module):
                 paths = list(layer.paths)
                 Us = [_sign(p.U) for p in paths]
                 Vs = [_sign(p.V) for p in paths]
-                h, g, l = (torch.stack([getattr(p, k) for p in paths]).half() for k in "hgl")
-                bias = layer.bias
+                h, g, l = (torch.stack([getattr(p, k) for p in paths]) for k in "hgl")
+                bias, bits = layer.bias, layer.scale_bits
             else:
                 P, r = layer.paths, layer.rank
                 Us = [unpack_signs(layer.U_bits[i], r) for i in range(P)]
                 Vs = [unpack_signs(layer.V_bits[i], r) for i in range(P)]
-                h, g, l, bias = layer.h, layer.g, layer.l, layer.bias
+                h, g, l, bias, bits = layer.h, layer.g, layer.l, layer.bias, getattr(layer, "scale_bits", 16)
             self.register_buffer("V_codes", torch.stack([pack_sign_codes(V.t()) for V in Vs]))
             self.register_buffer("U_codes", torch.stack([pack_sign_codes(U) for U in Us]))
-            self.register_buffer("h", h.half().clone())
-            self.register_buffer("g", g.half().clone())
-            self.register_buffer("l", l.half().clone())
+            set_scales(self, h.float(), g.float(), l.float(), bits)
             self.register_buffer("bias", None if bias is None else bias.detach().half().clone())
 
     @property
@@ -245,7 +243,7 @@ class LUTLittleBitLinear(nn.Module):
         return y.to(dt).view(*lead, self.out_features)
 
     def storage_bytes(self) -> int:
-        return sum(b.numel() * b.element_size() for b in self.buffers())
+        return persistent_bytes(self)
 
 
 class LUTBitLinear(nn.Module):
@@ -310,7 +308,7 @@ class LUTBitLinear(nn.Module):
         return y.to(dt).view(*lead, self.out_features)
 
     def storage_bytes(self) -> int:
-        return sum(b.numel() * b.element_size() for b in self.buffers())
+        return persistent_bytes(self)
 
 
 @torch.no_grad()

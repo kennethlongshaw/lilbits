@@ -13,7 +13,8 @@ testable on its own and has a dense FP reference.
 | | Bit-packed export: 1-bit signs (LittleBit), 2-bit codes (BitNet) | ✅ | `inference/packed.py`, `layers/bitnet.py` |
 | | Lookup-table (T-MAC style) CPU kernels for packed LittleBit and BitNet decode: AVX-512 / AVX2 / scalar, fused scales | ✅ 5–35× faster than FP32 dense at 1 token | `inference/lut.py`, `inference/lut_kernel.c`, `benchmarks/lut_bench.py` |
 | | Helion kernels for packed LittleBit | ✅ interpret mode only, GPU speed unmeasured | `inference/helion_kernels.py` |
-| | Cheaper scales (INT8 h/g), uneven bpw allocation per layer type | ⬜ | |
+| | INT8 h, g, l scales (one FP16 step per vector), straight-through in training, packed + LUT support | ✅ at width 128 and 1 bpw: rank 15 → 23 and weight error 0.72 → 0.66 at equal size; negligible at 2048 (`results/scale_bits_bench.md`) | `layers/littlebit.py` (`scale_bits=8`), `benchmarks/scale_bits_bench.py` |
+| | Uneven bpw allocation per layer type | ⬜ | |
 | Prelude / core mixer | Gated DeltaNet (fixed-size state, FP gates option) | ✅ naive per-token loop | `mixers/recurrent.py` |
 | | Other recurrent mixers: Mamba2 (SSD), GLA / RWKV-6 style, xLSTM mLSTM, minGRU | ✅ naive loops, smoke-tested only | `mixers/recurrent.py` |
 | | Chunked GDN for training speed (chunkwise WY form, exact vs the naive loop incl. gradients) | ✅ 5–16× faster fwd+bwd, ~3× less memory (`results/gdn_bench.md`) | `mixers/recurrent.py`, `benchmarks/gdn_bench.py` |
@@ -50,14 +51,14 @@ testable on its own and has a dense FP reference.
 
 - At d_model 128, LittleBit below 1 bpw loses to BitNet b1.58 at matched size (`results/frontier`). The
   FP16 scale vectors cost 16·(in+out)/(in·out) bpw per path, which is 0.25 at 128 wide and 0.008 at 4096.
-  Sub-1-bit cores need wide layers, or cheaper scales.
+  Sub-1-bit cores need wide layers, or cheaper scales: INT8 scales (`scale_bits=8`) buy rank 15 → 23 at width 128, 1 bpw.
 - A looped core with shared signs and per-loop FP scales fits LittleBit well: the signs are the large
   part and get stored once, and the per-loop scales are what makes each pass different.
 - `pack_signs` already produces the bit layout needed for sign(K) signatures, so XOR/popcount retrieval
   can reuse it.
 
 The whole design is assembled in `models/looped_index.py` (`LoopedIndexLM`) and trained stage by stage in
-`examples/09_looped_index_lm.py`. Still open: INT8 scales, a sparse-gather retrieval kernel, LUT
+`examples/09_looped_index_lm.py`. Still open: uneven bpw allocation, a sparse-gather retrieval kernel, LUT
 kernels inside the looped core, and a training run long enough to measure recall.
 
 ## Build order (matches the training stages)

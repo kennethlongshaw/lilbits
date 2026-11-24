@@ -78,20 +78,40 @@ def binarize(x: torch.Tensor, ste: str = "smooth", k: float = 100.0) -> torch.Te
     raise ValueError(f"unknown ste {ste!r}")
 
 
-def bits_per_weight(in_features: int, out_features: int, rank: int, paths: int = 1) -> float:
+def _scale_overhead(scale_bits: int) -> int:
+    """Fixed bits per path beyond the per-entry cost: INT8 scales carry one FP16 step size per vector (h, g, l)."""
+    return 0 if scale_bits >= FP_BITS else 3 * FP_BITS
+
+
+def bits_per_weight(in_features: int, out_features: int, rank: int, paths: int = 1, scale_bits: int = FP_BITS) -> float:
     """Storage bits / dense weight count, matching the paper's accounting.
 
-    Per path: r*(in+out) sign bits + FP16 scales h (out), g (in), l (r).
+    Per path: r*(in+out) sign bits + scales h (out), g (in), l (r) at `scale_bits` each (FP16 by default; INT8
+    adds one FP16 step size per vector).
     """
-    per_path = rank * (in_features + out_features) + FP_BITS * (in_features + out_features + rank)
-    return paths * per_path / (in_features * out_features)
+    per_path = rank * (in_features + out_features) + scale_bits * (in_features + out_features + rank)
+    return paths * (per_path + _scale_overhead(scale_bits)) / (in_features * out_features)
 
 
-def rank_for_bpw(in_features: int, out_features: int, bpw: float, paths: int = 1) -> int:
+def rank_for_bpw(in_features: int, out_features: int, bpw: float, paths: int = 1, scale_bits: int = FP_BITS) -> int:
     """Largest rank whose bits_per_weight does not exceed `bpw` (at least 1)."""
-    budget = bpw * in_features * out_features / paths - FP_BITS * (in_features + out_features)
-    r = math.floor(budget / (in_features + out_features + FP_BITS))
+    budget = bpw * in_features * out_features / paths - scale_bits * (in_features + out_features)
+    budget -= _scale_overhead(scale_bits)
+    r = math.floor(budget / (in_features + out_features + scale_bits))
     return max(1, min(r, min(in_features, out_features)))
+
+
+def int8_absmax(t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Symmetric INT8 per last-dim vector: (..., n) -> int8 (..., n), FP16 step (..., 1)."""
+    s = (t.abs().amax(-1, keepdim=True) / 127).clamp_min(1e-8).half()
+    return (t / s.float()).round().clamp(-127, 127).to(torch.int8), s
+
+
+def fake_int8(t: torch.Tensor) -> torch.Tensor:
+    """INT8 absmax round trip with a straight-through gradient (scale QAT)."""
+    s = (t.abs().amax(-1, keepdim=True) / 127).clamp_min(1e-8).detach()
+    s = s.half().float()  # the step is stored in FP16
+    return t + ((t / s).round().clamp(-127, 127) * s - t).detach()
 
 
 def _bimodal(shape, center: float, std: float) -> torch.Tensor:
@@ -176,16 +196,24 @@ class _Path(nn.Module):
         self.U.copy_(Up / Up.abs().max())
         self.V.copy_(Vp / Vp.abs().max())
 
-    def forward(self, x: torch.Tensor, ste: str, k: float) -> torch.Tensor:
+    def scales(self, scale_bits: int = FP_BITS) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """(h, g, l), INT8-rounded (straight-through) when scale_bits == 8."""
+        if scale_bits >= FP_BITS:
+            return self.h, self.g, self.l
+        return fake_int8(self.h), fake_int8(self.g), fake_int8(self.l)
+
+    def forward(self, x: torch.Tensor, ste: str, k: float, scale_bits: int = FP_BITS) -> torch.Tensor:
+        h, g, l = self.scales(scale_bits)
         Vb = binarize(self.V, ste, k)
         Ub = binarize(self.U, ste, k)
-        z = (x * self.g) @ Vb
-        z = z * self.l
-        return (z @ Ub.t()) * self.h
+        z = (x * g) @ Vb
+        z = z * l
+        return (z @ Ub.t()) * h
 
-    def weight(self) -> torch.Tensor:
+    def weight(self, scale_bits: int = FP_BITS) -> torch.Tensor:
+        h, g, l = self.scales(scale_bits)
         Ub, Vb = _sign(self.U), _sign(self.V)
-        return self.h[:, None] * ((Ub * self.l) @ Vb.t()) * self.g[None, :]
+        return h[:, None] * ((Ub * l) @ Vb.t()) * g[None, :]
 
 
 class LittleBitLinear(nn.Module):
@@ -205,14 +233,18 @@ class LittleBitLinear(nn.Module):
         gain: float = 1.0,
         init: str = "small",
         itq_iters: int = 0,
+        scale_bits: int = FP_BITS,
     ):
         super().__init__()
         self._infer_cache: tuple | None = None
+        if scale_bits not in (8, FP_BITS):
+            raise ValueError("scale_bits must be 8 or 16")
+        self.scale_bits = scale_bits
         paths = 2 if residual else 1
         if rank is None:
             if bpw is None:
                 raise ValueError("give rank or bpw")
-            rank = rank_for_bpw(in_features, out_features, bpw, paths)
+            rank = rank_for_bpw(in_features, out_features, bpw, paths, scale_bits)
         self.in_features, self.out_features, self.rank = in_features, out_features, rank
         self.ste, self.smooth_k = ste, smooth_k
         # Keep latents inside the STE's active region at init.
@@ -264,8 +296,11 @@ class LittleBitLinear(nn.Module):
         along the rank axis, so sum_i W_i = B A^T. The scales touch only weight-sized
         tensors, never activations, and all paths run as one pair of matmuls.
         """
-        A = [p.g[:, None] * binarize(p.V, self.ste, self.smooth_k) * p.l[None, :] for p in self.paths]
-        B = [p.h[:, None] * binarize(p.U, self.ste, self.smooth_k) for p in self.paths]
+        A, B = [], []
+        for p in self.paths:
+            h, g, l = p.scales(self.scale_bits)
+            A.append(g[:, None] * binarize(p.V, self.ste, self.smooth_k) * l[None, :])
+            B.append(h[:, None] * binarize(p.U, self.ste, self.smooth_k))
         if len(self.paths) == 1:
             return A[0], B[0]
         return torch.cat(A, dim=1), torch.cat(B, dim=1)
@@ -301,9 +336,9 @@ class LittleBitLinear(nn.Module):
 
     def forward_reference(self, x: torch.Tensor) -> torch.Tensor:
         """Unfused per-path forward (scales applied to activations); for tests."""
-        y = self.paths[0](x, self.ste, self.smooth_k)
+        y = self.paths[0](x, self.ste, self.smooth_k, self.scale_bits)
         for p in self.paths[1:]:
-            y = y + p(x, self.ste, self.smooth_k)
+            y = y + p(x, self.ste, self.smooth_k, self.scale_bits)
         if self.bias is not None:
             y = y + self.bias
         return y
@@ -311,11 +346,11 @@ class LittleBitLinear(nn.Module):
     @torch.no_grad()
     def weight(self) -> torch.Tensor:
         """Materialize the dense effective weight (for inspection/tests only)."""
-        return torch.stack([p.weight() for p in self.paths]).sum(0)
+        return torch.stack([p.weight(self.scale_bits) for p in self.paths]).sum(0)
 
     @property
     def bpw(self) -> float:
-        return bits_per_weight(self.in_features, self.out_features, self.rank, len(self.paths))
+        return bits_per_weight(self.in_features, self.out_features, self.rank, len(self.paths), self.scale_bits)
 
     def storage_bits(self) -> int:
         return round(self.bpw * self.in_features * self.out_features)
@@ -323,5 +358,5 @@ class LittleBitLinear(nn.Module):
     def extra_repr(self) -> str:
         return (
             f"in={self.in_features}, out={self.out_features}, rank={self.rank}, "
-            f"paths={len(self.paths)}, bpw={self.bpw:.3f}, ste={self.ste}"
+            f"paths={len(self.paths)}, bpw={self.bpw:.3f}, ste={self.ste}, scale_bits={self.scale_bits}"
         )

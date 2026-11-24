@@ -44,6 +44,7 @@ class Config:
     mixer: str = "softmax"
     conv_size: int = 4  # gdn: short causal conv kernel on q/k/v
     lb_gates: bool = False  # gdn: also LittleBit the per-head decay/beta projections (default keeps them FP)
+    scale_bits: int = 16  # LittleBit h, g, l scales: 16 (FP16) or 8 (INT8 + one FP16 step per vector)
 
 
 LinearFactory = Callable[[int, int], nn.Module]
@@ -61,6 +62,7 @@ def make_linear_factory(cfg: Config) -> LinearFactory:
             smooth_k=cfg.smooth_k,
             init=cfg.init,
             itq_iters=cfg.itq_iters,
+            scale_bits=cfg.scale_bits,
         )
     if cfg.linear == "bitnet":
         return BitLinear

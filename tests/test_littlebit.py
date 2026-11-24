@@ -148,3 +148,36 @@ def test_inference_cache_cleared_when_training_resumes():
     layer.eval()
     with torch.no_grad():
         torch.testing.assert_close(layer(x), layer.forward_reference(x), rtol=1e-4, atol=1e-5)
+
+
+def test_int8_scales_rank_storage_and_packing():
+    from lilbits.inference.lut import LUTLittleBitLinear
+    from lilbits.inference.packed import PackedLittleBitLinear
+    from lilbits.layers.littlebit import rank_for_bpw
+
+    # cheaper scales buy rank at the same budget, most at small widths
+    assert rank_for_bpw(128, 128, 0.55, 2, scale_bits=8) > rank_for_bpw(128, 128, 0.55, 2)
+    torch.manual_seed(0)
+    l16 = LittleBitLinear(128, 128, bpw=0.55, residual=True)
+    l8 = LittleBitLinear(128, 128, bpw=0.55, residual=True, scale_bits=8)
+    assert l8.bpw <= 0.55 and l8.rank > l16.rank
+    with torch.no_grad():
+        for p in l8.parameters():
+            p.add_(torch.randn_like(p) * 0.1)
+    l8.eval()
+    x = torch.randn(3, 128)
+    with torch.no_grad():
+        ref = l8(x)
+        torch.testing.assert_close(l8.forward_reference(x), ref, rtol=1e-4, atol=1e-4)
+        packed = PackedLittleBitLinear(l8)
+        assert packed.h_q.dtype == torch.int8 and "h" not in packed.state_dict()
+        torch.testing.assert_close(packed(x), ref, rtol=1e-3, atol=1e-3)
+        for src in (l8, packed):
+            torch.testing.assert_close(LUTLittleBitLinear(src)(x), ref, rtol=1e-3, atol=1e-3)
+        # storage: byte-padded signs + INT8 scales + one FP16 step per vector, per path
+        r = l8.rank
+        assert packed.storage_bytes() == 2 * (256 * ((r + 7) // 8) + (256 + r) + 3 * 2)
+        # a packed INT8 checkpoint reloads into an empty layer
+        empty = PackedLittleBitLinear.empty(128, 128, l8.rank, 2, scale_bits=8)
+        empty.load_state_dict(packed.state_dict())
+        torch.testing.assert_close(empty(x), packed(x))

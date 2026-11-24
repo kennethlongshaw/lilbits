@@ -40,8 +40,9 @@ class LoopScaledLinear(nn.Module):
         x = x * self.g[i]
         y = None
         for p in base.paths:
-            z = ((x * p.g) @ binarize(p.V, base.ste, base.smooth_k)) * (p.l * self.l[i])
-            z = (z @ binarize(p.U, base.ste, base.smooth_k).t()) * p.h
+            h, g, l = p.scales(base.scale_bits)
+            z = ((x * g) @ binarize(p.V, base.ste, base.smooth_k)) * (l * self.l[i])
+            z = (z @ binarize(p.U, base.ste, base.smooth_k).t()) * h
             y = z if y is None else y + z
         assert y is not None
         y = y * self.h[i]
@@ -50,7 +51,9 @@ class LoopScaledLinear(nn.Module):
     def storage_bits(self) -> float:
         """Base storage + 16-bit per-loop scales."""
         base_bits = (
-            bits_per_weight(self.in_features, self.out_features, self.base.rank, len(self.base.paths))
+            bits_per_weight(
+                self.in_features, self.out_features, self.base.rank, len(self.base.paths), self.base.scale_bits
+            )
             * self.in_features
             * self.out_features
             if isinstance(self.base, LittleBitLinear)

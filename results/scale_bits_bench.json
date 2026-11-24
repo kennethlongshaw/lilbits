@@ -1,0 +1,200 @@
+[
+ {
+  "width": 128,
+  "bpw_budget": 1.0,
+  "scale_bits": 16,
+  "rank": 15,
+  "bpw": 0.998046875,
+  "packed_bytes": 2108,
+  "rel_weight_err": 0.7169904708862305,
+  "rel_output_err": 0.7167235612869263,
+  "fit_s": 0.009068445000139036
+ },
+ {
+  "width": 128,
+  "bpw_budget": 1.0,
+  "scale_bits": 8,
+  "rank": 23,
+  "bpw": 0.9970703125,
+  "packed_bytes": 2106,
+  "rel_weight_err": 0.6568949818611145,
+  "rel_output_err": 0.652428925037384,
+  "fit_s": 0.011028855000176918
+ },
+ {
+  "width": 128,
+  "bpw_budget": 0.55,
+  "scale_bits": 16,
+  "rank": 1,
+  "bpw": 0.533203125,
+  "packed_bytes": 1540,
+  "rel_weight_err": 0.851845920085907,
+  "rel_output_err": 0.8501959443092346,
+  "fit_s": 0.005150304999915534
+ },
+ {
+  "width": 128,
+  "bpw_budget": 0.55,
+  "scale_bits": 8,
+  "rank": 9,
+  "bpw": 0.5458984375,
+  "packed_bytes": 1566,
+  "rel_weight_err": 0.7690233588218689,
+  "rel_output_err": 0.7668273448944092,
+  "fit_s": 0.006141077000165751
+ },
+ {
+  "width": 128,
+  "bpw_budget": 0.3,
+  "scale_bits": 16,
+  "rank": 1,
+  "bpw": 0.533203125,
+  "packed_bytes": 1540,
+  "rel_weight_err": 0.851845920085907,
+  "rel_output_err": 0.8501959443092346,
+  "fit_s": 0.004688964000024498
+ },
+ {
+  "width": 128,
+  "bpw_budget": 0.3,
+  "scale_bits": 8,
+  "rank": 1,
+  "bpw": 0.2880859375,
+  "packed_bytes": 1038,
+  "rel_weight_err": 0.8518588542938232,
+  "rel_output_err": 0.8502100110054016,
+  "fit_s": 0.0045072240000081365
+ },
+ {
+  "width": 512,
+  "bpw_budget": 1.0,
+  "scale_bits": 16,
+  "rank": 110,
+  "bpw": 0.997802734375,
+  "packed_bytes": 33208,
+  "rel_weight_err": 0.5941250920295715,
+  "rel_output_err": 0.5923708081245422,
+  "fit_s": 0.11797962300011022
+ },
+ {
+  "width": 512,
+  "bpw_budget": 1.0,
+  "scale_bits": 8,
+  "rank": 119,
+  "bpw": 0.99981689453125,
+  "packed_bytes": 33018,
+  "rel_weight_err": 0.5829671025276184,
+  "rel_output_err": 0.5803115963935852,
+  "fit_s": 0.1263690629998564
+ },
+ {
+  "width": 512,
+  "bpw_budget": 0.55,
+  "scale_bits": 16,
+  "rank": 53,
+  "bpw": 0.5455322265625,
+  "packed_bytes": 18644,
+  "rel_weight_err": 0.6887803077697754,
+  "rel_output_err": 0.6889598965644836,
+  "fit_s": 0.07481166399998074
+ },
+ {
+  "width": 512,
+  "bpw_budget": 0.55,
+  "scale_bits": 8,
+  "rank": 61,
+  "bpw": 0.54315185546875,
+  "packed_bytes": 18566,
+  "rel_weight_err": 0.6730607748031616,
+  "rel_output_err": 0.6713373064994812,
+  "fit_s": 0.08057498499988469
+ },
+ {
+  "width": 512,
+  "bpw_budget": 0.3,
+  "scale_bits": 16,
+  "rank": 22,
+  "bpw": 0.299560546875,
+  "packed_bytes": 10328,
+  "rel_weight_err": 0.7713508605957031,
+  "rel_output_err": 0.7740030884742737,
+  "fit_s": 0.06118402399988554
+ },
+ {
+  "width": 512,
+  "bpw_budget": 0.3,
+  "scale_bits": 8,
+  "rank": 30,
+  "bpw": 0.299072265625,
+  "packed_bytes": 10312,
+  "rel_weight_err": 0.7459452152252197,
+  "rel_output_err": 0.7461144924163818,
+  "fit_s": 0.08089274999997542
+ },
+ {
+  "width": 2048,
+  "bpw_budget": 1.0,
+  "scale_bits": 16,
+  "rank": 494,
+  "bpw": 0.9998626708984375,
+  "packed_bytes": 526264,
+  "rel_weight_err": 0.543724536895752,
+  "rel_output_err": 0.5403590798377991,
+  "fit_s": 3.379879969000058
+ },
+ {
+  "width": 2048,
+  "bpw_budget": 1.0,
+  "scale_bits": 8,
+  "rank": 503,
+  "bpw": 0.9999885559082031,
+  "packed_bytes": 525306,
+  "rel_weight_err": 0.5414590239524841,
+  "rel_output_err": 0.5392411947250366,
+  "fit_s": 3.2762350119999155
+ },
+ {
+  "width": 2048,
+  "bpw_budget": 0.55,
+  "scale_bits": 16,
+  "rank": 264,
+  "bpw": 0.54888916015625,
+  "packed_bytes": 287776,
+  "rel_weight_err": 0.6261711120605469,
+  "rel_output_err": 0.6224485039710999,
+  "fit_s": 2.07112180099989
+ },
+ {
+  "width": 2048,
+  "bpw_budget": 0.55,
+  "scale_bits": 8,
+  "rank": 273,
+  "bpw": 0.5498924255371094,
+  "packed_bytes": 295470,
+  "rel_weight_err": 0.6224902272224426,
+  "rel_output_err": 0.6187241673469543,
+  "fit_s": 2.193371354999954
+ },
+ {
+  "width": 2048,
+  "bpw_budget": 0.3,
+  "scale_bits": 16,
+  "rank": 137,
+  "bpw": 0.29987335205078125,
+  "packed_bytes": 164388,
+  "rel_weight_err": 0.6938439607620239,
+  "rel_output_err": 0.6895286440849304,
+  "fit_s": 1.738743999999997
+ },
+ {
+  "width": 2048,
+  "bpw_budget": 0.3,
+  "scale_bits": 8,
+  "rank": 145,
+  "bpw": 0.2994041442871094,
+  "packed_bytes": 164142,
+  "rel_weight_err": 0.6889345645904541,
+  "rel_output_err": 0.6846563816070557,
+  "fit_s": 1.8840643240000645
+ }
+]
