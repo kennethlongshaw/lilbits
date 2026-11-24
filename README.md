@@ -261,7 +261,7 @@ Full CPU output (4 threads): `results/infer_bench_cpu.md`. Highlights:
   Single-token: FP 0.28 ms; LittleBit 1.41 bpw 3.6 → 0.30 ms. At width 128 and ~1.4 bpw the rank is close to
   break-even, so parity is the best possible.
 - Single layers at real widths: speed tracks MACs. ~1 bpw ≈ dense rank, so ≈1× speed; 0.55 bpw ≈ 1.7-2.7×;
-  0.1 bpw ≈ 7-21× (4096×4096: 0.83 → 0.039 ms per token, 116 → 14 ms for 2,048 tokens).
+  0.1 bpw ≈ 7-22× (4096×4096: 0.77 → 0.036 ms per token, 120 → 16 ms for 2,048 tokens).
 
 These are FP32 cached factors, i.e. the speedup comes only from the low rank. A bit-packed kernel (1-bit
 factors, which is how the paper deploys) would also cut weight memory traffic ~32×, which should help most in
