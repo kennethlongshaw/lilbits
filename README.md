@@ -222,6 +222,8 @@ and lists what is still missing. Runnable demos are in `examples/`.
 |---|---|---|
 | linear | `fp`, `littlebit` (any bpw, 1 or 2 paths), `bitnet` (b1.58, 8-bit activations) | `layers/littlebit.py`, `layers/bitnet.py` |
 | token mixer | `softmax`, `gdn` (Gated DeltaNet), `mamba2` (SSD), `gla` (GLA / RWKV-6 style), `mlstm` (xLSTM), `mingru` | `models/tinylm.py`, `mixers/recurrent.py` |
+| model assemblies | `TinyLM`; recurrent-depth looped LM (Huginn, Ouro exit gate); byte-level BLT and H-Net; decision-model parts | `models/` |
+| data | Markov source with known floor, char-level text, raw bytes (`ByteSource`) | `data.py` |
 | packing | 1-bit signs + FP16 scales (LittleBit), 2-bit ternary codes (BitNet), Helion kernels | `inference/packed.py`, `layers/bitnet.py`, `inference/helion_kernels.py` |
 | optimizer | AdamW, torch Muon, DeepSeek-style Muon | `training/optim.py`, `train.py` |
 
@@ -475,7 +477,9 @@ The repo has three layers:
     b1.58, inference cache, 2-bit `PackedBitLinear`), `ffn.py` (`SwiGLU`)
   - `mixers/`: `attention.py` (causal softmax, optional QK-norm), `recurrent.py` (Gated DeltaNet, Mamba2, GLA,
     mLSTM, minGRU, each with state in and state out)
-  - `models/`: `tinylm.py` (`Config`, linear / mixer factories, `TransformerBlock`, `TinyLM`, FP → LittleBit
+  - `models/`: `recurrent_depth.py` (looped LM: prelude, shared core iterated r times, coda; sampled depth, truncated
+    backprop, adaptive exit, Ouro gate), `byte_latent.py` (BLT entropy patching + hash n-gram embeddings, H-Net dynamic
+    chunking), `tinylm.py` (`Config`, linear / mixer factories, `TransformerBlock`, `TinyLM`, FP → LittleBit
     conversion), `decision.py` (`StatefulBlock`, state fork and clone, `TypedReadout`, CRPS, ECE, Brier)
   - `inference/`: `packed.py` (1-bit packed LittleBit), `helion_kernels.py`
   - `training/`: `train.py` (Fabric loop, `TrainConfig`, `lb-train` CLI), `optim.py` (DeepSeek-style Muon),

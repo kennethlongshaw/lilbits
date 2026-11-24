@@ -17,12 +17,15 @@ testable on its own and has a dense FP reference.
 | | Other recurrent mixers: Mamba2 (SSD), GLA / RWKV-6 style, xLSTM mLSTM, minGRU | ✅ naive loops, smoke-tested only | `mixers/recurrent.py` |
 | | Chunked GDN for training speed (or `fla` kernel hook) | ⬜ | |
 | | State carry / rollback API (`initial_state` in, final state out) | ✅ every mixer; conv state not carried (use `conv_size=1`) | `mixers/recurrent.py`, `examples/03_state_rollback.py` |
-| Embed | Tied embedding / LM head | ⬜ | |
-| Looped core | Shared-weight block applied N times | ⬜ | |
+| Embed | Tied embedding / LM head | ✅ (looped LM) | `models/recurrent_depth.py` |
+| | Byte-level input with dynamic patching instead of a tokenizer: BLT entropy patches, H-Net learned chunks | ✅ | `models/byte_latent.py`, `examples/07_byte_level_patching.py` |
+| Looped core | Shared-weight block applied N times (prelude / core / coda, input injection, sandwich norm) | ✅ | `models/recurrent_depth.py`, `examples/06_looped_reasoning_lm.py` |
+| | Sampled depth + truncated backprop (Huginn); learned exit gate (Ouro) | ✅ | `models/recurrent_depth.py` |
 | | Per-loop FP scales (h, g, l) over shared LittleBit signs | ⬜ (LittleBit already separates signs from scales, so this is a small change) | |
 | | Per-loop GDN state | ⬜ | |
 | | Loop memory: attend over passes 1..i of the same token | ⬜ | |
-| | Halting for decode, copying state forward into skipped loops | ⬜ | |
+| | Adaptive exit: freeze a position's state when KL between steps is small, or gate CDF ≥ q | ✅ (full-sequence; no KV-cache sharing across loops yet) | `models/recurrent_depth.py` |
+| | Halting for decode, copying state forward into skipped loops' GDN | ⬜ | |
 | Index / retrieval | 4-bit K/V cache with GQA | ⬜ | |
 | | sign(K) signatures + XOR/popcount scoring | ⬜ (reuses `pack_signs` bit layout) | `inference/packed.py` |
 | | Block summaries every 64 tokens (shallow from prelude, deep from final loop) | ⬜ | |

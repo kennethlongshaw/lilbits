@@ -7,27 +7,27 @@
       "littlebit"
     ],
     "ok": true,
-    "wall_s": 11.816651190999437,
-    "cpu_s": 12.014367,
-    "cpu_util": 1.016731966257171,
-    "peak_rss_mib": 898.47265625,
+    "wall_s": 12.56465885,
+    "cpu_s": 12.828748,
+    "cpu_util": 1.0210184099029476,
+    "peak_rss_mib": 899.0859375,
     "metrics": {
       "train_steps": 60,
-      "train_wall_s": 7.509379051999531,
-      "train_cpu_s": 7.756906944000001,
-      "train_cpu_util": 1.0329624980023562,
-      "train_peak_extra_mib": 102.546875,
-      "infer_ms_per_batch": 27.92137910000747,
-      "infer_cpu_ms_per_batch": 28.945701099999965,
-      "infer_peak_extra_mib": 15.4375,
+      "train_wall_s": 7.996876573999998,
+      "train_cpu_s": 8.314779005999998,
+      "train_cpu_util": 1.0397533248210415,
+      "train_peak_extra_mib": 104.77734375,
+      "infer_ms_per_batch": 30.984162200002174,
+      "infer_cpu_ms_per_batch": 31.905203799999878,
+      "infer_peak_extra_mib": 16.453125,
       "ram_weights_bytes": 140000,
       "checkpoint_bytes": 163769,
       "stored_bytes": 103392.0
     },
     "tail": [
       "littlebit: eval loss 3.184 (floor ~0.89), block bpw 1.40, stored 101.0 KiB",
-      "packed: 1603 KiB -> 137 KiB in RAM, eval loss 3.184, 27.9 ms per 32x63 batch",
-      "METRICS {\"train_steps\": 60, \"train_wall_s\": 7.509379051999531, \"train_cpu_s\": 7.756906944000001, \"train_cpu_util\": 1.0329624980023562, \"train_peak_extra_mib\": 102.546875, \"infer_ms_per_batch\": 27.92137910000747, \"infer_cpu_ms_per_batch\": 28.945701099999965, \"infer_peak_extra_mib\": 15.4375, \"ram_weights_bytes\": 140000, \"checkpoint_bytes\": 163769, \"stored_bytes\": 103392.0}"
+      "packed: 1603 KiB -> 137 KiB in RAM, eval loss 3.184, 31.0 ms per 32x63 batch",
+      "METRICS {\"train_steps\": 60, \"train_wall_s\": 7.996876573999998, \"train_cpu_s\": 8.314779005999998, \"train_cpu_util\": 1.0397533248210415, \"train_peak_extra_mib\": 104.77734375, \"infer_ms_per_batch\": 30.984162200002174, \"infer_cpu_ms_per_batch\": 31.905203799999878, \"infer_peak_extra_mib\": 16.453125, \"ram_weights_bytes\": 140000, \"checkpoint_bytes\": 163769, \"stored_bytes\": 103392.0}"
     ]
   },
   {
@@ -38,27 +38,27 @@
       "bitnet"
     ],
     "ok": true,
-    "wall_s": 12.472400687999652,
-    "cpu_s": 12.647265,
-    "cpu_util": 1.0140201005704215,
-    "peak_rss_mib": 901.25,
+    "wall_s": 15.07738494199998,
+    "cpu_s": 15.323112,
+    "cpu_util": 1.0162977239717157,
+    "peak_rss_mib": 902.38671875,
     "metrics": {
       "train_steps": 60,
-      "train_wall_s": 7.9733352489993194,
-      "train_cpu_s": 8.232940223,
-      "train_cpu_util": 1.0325591444349793,
-      "train_peak_extra_mib": 132.59375,
-      "infer_ms_per_batch": 36.724863299969,
-      "infer_cpu_ms_per_batch": 38.481075700000034,
-      "infer_peak_extra_mib": 21.93359375,
+      "train_wall_s": 10.046740768999825,
+      "train_cpu_s": 10.365117335,
+      "train_cpu_util": 1.0316895372659118,
+      "train_peak_extra_mib": 134.39453125,
+      "infer_ms_per_batch": 40.49568420000469,
+      "infer_cpu_ms_per_batch": 41.79554270000008,
+      "infer_peak_extra_mib": 23.0859375,
       "ram_weights_bytes": 224284,
       "checkpoint_bytes": 178743,
       "stored_bytes": 112385.82723563086
     },
     "tail": [
       "bitnet: eval loss 3.280 (floor ~0.89), block bpw 1.59, stored 109.8 KiB",
-      "packed: 1610 KiB -> 219 KiB in RAM, eval loss 3.280, 36.7 ms per 32x63 batch",
-      "METRICS {\"train_steps\": 60, \"train_wall_s\": 7.9733352489993194, \"train_cpu_s\": 8.232940223, \"train_cpu_util\": 1.0325591444349793, \"train_peak_extra_mib\": 132.59375, \"infer_ms_per_batch\": 36.724863299969, \"infer_cpu_ms_per_batch\": 38.481075700000034, \"infer_peak_extra_mib\": 21.93359375, \"ram_weights_bytes\": 224284, \"checkpoint_bytes\": 178743, \"stored_bytes\": 112385.82723563086}"
+      "packed: 1610 KiB -> 219 KiB in RAM, eval loss 3.280, 40.5 ms per 32x63 batch",
+      "METRICS {\"train_steps\": 60, \"train_wall_s\": 10.046740768999825, \"train_cpu_s\": 10.365117335, \"train_cpu_util\": 1.0316895372659118, \"train_peak_extra_mib\": 134.39453125, \"infer_ms_per_batch\": 40.49568420000469, \"infer_cpu_ms_per_batch\": 41.79554270000008, \"infer_peak_extra_mib\": 23.0859375, \"ram_weights_bytes\": 224284, \"checkpoint_bytes\": 178743, \"stored_bytes\": 112385.82723563086}"
     ]
   },
   {
@@ -69,27 +69,27 @@
       "fp"
     ],
     "ok": true,
-    "wall_s": 10.351095043999521,
-    "cpu_s": 10.452773,
-    "cpu_util": 1.0098229178235032,
-    "peak_rss_mib": 894.49609375,
+    "wall_s": 8.954568956999992,
+    "cpu_s": 9.035232,
+    "cpu_util": 1.0090080319206154,
+    "peak_rss_mib": 898.3984375,
     "metrics": {
       "train_steps": 60,
-      "train_wall_s": 5.953302578000148,
-      "train_cpu_s": 6.1304172910000005,
-      "train_cpu_util": 1.029750665396105,
-      "train_peak_extra_mib": 89.16796875,
-      "infer_ms_per_batch": 19.6898921999491,
-      "infer_cpu_ms_per_batch": 20.49035640000003,
-      "infer_peak_extra_mib": 12.703125,
+      "train_wall_s": 5.203470029000073,
+      "train_cpu_s": 5.371381572000001,
+      "train_cpu_util": 1.032269147715682,
+      "train_peak_extra_mib": 91.26953125,
+      "infer_ms_per_batch": 16.086030499991466,
+      "infer_cpu_ms_per_batch": 16.695117200000098,
+      "infer_peak_extra_mib": 17.3828125,
       "ram_weights_bytes": 1649152,
       "checkpoint_bytes": 1656865,
       "stored_bytes": 824576.0
     },
     "tail": [
       "fp: eval loss 3.152 (floor ~0.89), block bpw 16.00, stored 805.2 KiB",
-      "packed: 1610 KiB -> 1610 KiB in RAM, eval loss 3.152, 19.7 ms per 32x63 batch",
-      "METRICS {\"train_steps\": 60, \"train_wall_s\": 5.953302578000148, \"train_cpu_s\": 6.1304172910000005, \"train_cpu_util\": 1.029750665396105, \"train_peak_extra_mib\": 89.16796875, \"infer_ms_per_batch\": 19.6898921999491, \"infer_cpu_ms_per_batch\": 20.49035640000003, \"infer_peak_extra_mib\": 12.703125, \"ram_weights_bytes\": 1649152, \"checkpoint_bytes\": 1656865, \"stored_bytes\": 824576.0}"
+      "packed: 1610 KiB -> 1610 KiB in RAM, eval loss 3.152, 16.1 ms per 32x63 batch",
+      "METRICS {\"train_steps\": 60, \"train_wall_s\": 5.203470029000073, \"train_cpu_s\": 5.371381572000001, \"train_cpu_util\": 1.032269147715682, \"train_peak_extra_mib\": 91.26953125, \"infer_ms_per_batch\": 16.086030499991466, \"infer_cpu_ms_per_batch\": 16.695117200000098, \"infer_peak_extra_mib\": 17.3828125, \"ram_weights_bytes\": 1649152, \"checkpoint_bytes\": 1656865, \"stored_bytes\": 824576.0}"
     ]
   },
   {
@@ -98,10 +98,10 @@
       "examples/02_recurrent_mixers.py"
     ],
     "ok": true,
-    "wall_s": 1.541708538000421,
-    "cpu_s": 1.518111,
-    "cpu_util": 0.9846939045748383,
-    "peak_rss_mib": 640.9375,
+    "wall_s": 1.1791900950001946,
+    "cpu_s": 1.148465,
+    "cpu_util": 0.9739439000289521,
+    "peak_rss_mib": 641.0625,
     "metrics": {},
     "tail": [
       "mingru     25,178           128  (littlebit)",
@@ -115,10 +115,10 @@
       "examples/03_state_rollback.py"
     ],
     "ok": true,
-    "wall_s": 1.3351759930001208,
-    "cpu_s": 1.332433,
-    "cpu_util": 0.997945594427625,
-    "peak_rss_mib": 630.1171875,
+    "wall_s": 1.1323769180000909,
+    "cpu_s": 1.129047,
+    "cpu_util": 0.9970593554609255,
+    "peak_rss_mib": 630.37109375,
     "metrics": {},
     "tail": [
       "state after rollback matches a clean run: True",
@@ -134,22 +134,22 @@
       "littlebit"
     ],
     "ok": true,
-    "wall_s": 24.488355507999586,
-    "cpu_s": 25.048344,
-    "cpu_util": 1.0228675417513227,
-    "peak_rss_mib": 1201.66796875,
+    "wall_s": 28.38678197499985,
+    "cpu_s": 29.284083,
+    "cpu_util": 1.0316098184637625,
+    "peak_rss_mib": 1207.08984375,
     "metrics": {
       "train_steps": 30,
-      "train_wall_s": 19.045041385999866,
-      "train_cpu_s": 19.737938295,
-      "train_cpu_util": 1.0363820111994866,
-      "train_peak_extra_mib": 430.28515625,
-      "infer_wall_s": 0.29177528499985783,
-      "infer_cpu_s": 0.3003634450000021,
-      "infer_cpu_util": 1.0294341585516693,
-      "infer_peak_extra_mib": 13.88671875,
-      "prefill_ms_per_state": 16.412893000051554,
-      "ms_per_question_batched": 0.6494751750011574,
+      "train_wall_s": 23.33332909800015,
+      "train_cpu_s": 24.274894122,
+      "train_cpu_util": 1.040352794067459,
+      "train_peak_extra_mib": 435.8515625,
+      "infer_wall_s": 0.28705055500017806,
+      "infer_cpu_s": 0.29708028900000016,
+      "infer_cpu_util": 1.0349406535716883,
+      "infer_peak_extra_mib": 14.1640625,
+      "prefill_ms_per_state": 15.693061799993302,
+      "ms_per_question_batched": 0.6468523187500352,
       "params": 240647,
       "stored_bytes": 288334.0,
       "ram_weights_bytes": 984860,
@@ -158,8 +158,8 @@
     },
     "tail": [
       "  temps  choice 1.03  score 0.98  noul 1.02",
-      "  prefill_ms_per_state 16.41  ms_per_question_batched 0.65",
-      "METRICS {\"train_steps\": 30, \"train_wall_s\": 19.045041385999866, \"train_cpu_s\": 19.737938295, \"train_cpu_util\": 1.0363820111994866, \"train_peak_extra_mib\": 430.28515625, \"infer_wall_s\": 0.29177528499985783, \"infer_cpu_s\": 0.3003634450000021, \"infer_cpu_util\": 1.0294341585516693, \"infer_peak_extra_mib\": 13.88671875, \"prefill_ms_per_state\": 16.412893000051554, \"ms_per_question_batched\": 0.6494751750011574, \"params\": 240647, \"stored_bytes\": 288334.0, \"ram_weights_bytes\": 984860, \"checkpoint_bytes\": 1026605, \"choice_acc\": 0.21875}"
+      "  prefill_ms_per_state 15.69  ms_per_question_batched 0.65",
+      "METRICS {\"train_steps\": 30, \"train_wall_s\": 23.33332909800015, \"train_cpu_s\": 24.274894122, \"train_cpu_util\": 1.040352794067459, \"train_peak_extra_mib\": 435.8515625, \"infer_wall_s\": 0.28705055500017806, \"infer_cpu_s\": 0.29708028900000016, \"infer_cpu_util\": 1.0349406535716883, \"infer_peak_extra_mib\": 14.1640625, \"prefill_ms_per_state\": 15.693061799993302, \"ms_per_question_batched\": 0.6468523187500352, \"params\": 240647, \"stored_bytes\": 288334.0, \"ram_weights_bytes\": 984860, \"checkpoint_bytes\": 1026605, \"choice_acc\": 0.21875}"
     ]
   },
   {
@@ -170,22 +170,22 @@
       "bitnet"
     ],
     "ok": true,
-    "wall_s": 27.99319587699938,
-    "cpu_s": 28.666621,
-    "cpu_util": 1.0240567431442846,
-    "peak_rss_mib": 1222.8828125,
+    "wall_s": 27.232825078999895,
+    "cpu_s": 27.931269999999998,
+    "cpu_util": 1.0256471709774502,
+    "peak_rss_mib": 1223.55078125,
     "metrics": {
       "train_steps": 30,
-      "train_wall_s": 22.435482307999337,
-      "train_cpu_s": 23.290692943,
-      "train_cpu_util": 1.0381186650351502,
-      "train_peak_extra_mib": 457.73828125,
-      "infer_wall_s": 0.4318508100004692,
-      "infer_cpu_s": 0.4308681340000007,
-      "infer_cpu_util": 0.9977245011987648,
-      "infer_peak_extra_mib": 17.62109375,
-      "prefill_ms_per_state": 20.20600640007615,
-      "ms_per_question_batched": 1.0288625468746204,
+      "train_wall_s": 22.447660350999968,
+      "train_cpu_s": 23.242177152,
+      "train_cpu_util": 1.035394192026103,
+      "train_peak_extra_mib": 458.171875,
+      "infer_wall_s": 0.2733844219999355,
+      "infer_cpu_s": 0.2814854939999982,
+      "infer_cpu_util": 1.0296325296840236,
+      "infer_peak_extra_mib": 17.53515625,
+      "prefill_ms_per_state": 15.488462199982678,
+      "ms_per_question_batched": 0.6083554468752084,
       "params": 368931,
       "stored_bytes": 306134.79682160006,
       "ram_weights_bytes": 1497996,
@@ -194,8 +194,8 @@
     },
     "tail": [
       "  temps  choice 1.03  score 0.98  noul 1.02",
-      "  prefill_ms_per_state 20.21  ms_per_question_batched 1.03",
-      "METRICS {\"train_steps\": 30, \"train_wall_s\": 22.435482307999337, \"train_cpu_s\": 23.290692943, \"train_cpu_util\": 1.0381186650351502, \"train_peak_extra_mib\": 457.73828125, \"infer_wall_s\": 0.4318508100004692, \"infer_cpu_s\": 0.4308681340000007, \"infer_cpu_util\": 0.9977245011987648, \"infer_peak_extra_mib\": 17.62109375, \"prefill_ms_per_state\": 20.20600640007615, \"ms_per_question_batched\": 1.0288625468746204, \"params\": 368931, \"stored_bytes\": 306134.79682160006, \"ram_weights_bytes\": 1497996, \"checkpoint_bytes\": 1495288, \"choice_acc\": 0.25}"
+      "  prefill_ms_per_state 15.49  ms_per_question_batched 0.61",
+      "METRICS {\"train_steps\": 30, \"train_wall_s\": 22.447660350999968, \"train_cpu_s\": 23.242177152, \"train_cpu_util\": 1.035394192026103, \"train_peak_extra_mib\": 458.171875, \"infer_wall_s\": 0.2733844219999355, \"infer_cpu_s\": 0.2814854939999982, \"infer_cpu_util\": 1.0296325296840236, \"infer_peak_extra_mib\": 17.53515625, \"prefill_ms_per_state\": 15.488462199982678, \"ms_per_question_batched\": 0.6083554468752084, \"params\": 368931, \"stored_bytes\": 306134.79682160006, \"ram_weights_bytes\": 1497996, \"checkpoint_bytes\": 1495288, \"choice_acc\": 0.25}"
     ]
   },
   {
@@ -206,22 +206,22 @@
       "fp"
     ],
     "ok": true,
-    "wall_s": 23.487620621999667,
-    "cpu_s": 24.087888,
-    "cpu_util": 1.0255567555207399,
-    "peak_rss_mib": 1189.99609375,
+    "wall_s": 24.665572917999953,
+    "cpu_s": 25.211941,
+    "cpu_util": 1.0221510395812186,
+    "peak_rss_mib": 1190.93359375,
     "metrics": {
       "train_steps": 30,
-      "train_wall_s": 18.578635861000294,
-      "train_cpu_s": 19.248557878,
-      "train_cpu_util": 1.0360587301463822,
-      "train_peak_extra_mib": 424.6015625,
-      "infer_wall_s": 0.3009079599996767,
-      "infer_cpu_s": 0.30960238700000176,
-      "infer_cpu_util": 1.0288939747567143,
-      "infer_peak_extra_mib": 13.33984375,
-      "prefill_ms_per_state": 15.373334200012323,
-      "ms_per_question_batched": 0.6957648718753262,
+      "train_wall_s": 19.03572008099991,
+      "train_cpu_s": 19.667048277000003,
+      "train_cpu_util": 1.0331654486047124,
+      "train_peak_extra_mib": 425.640625,
+      "infer_wall_s": 0.3466797470000529,
+      "infer_cpu_s": 0.35702779800000073,
+      "infer_cpu_util": 1.0298490208600108,
+      "infer_peak_extra_mib": 14.8203125,
+      "prefill_ms_per_state": 16.94753500000843,
+      "ms_per_question_batched": 0.8133767031246464,
       "params": 368931,
       "stored_bytes": 737862.0,
       "ram_weights_bytes": 1497996,
@@ -230,8 +230,8 @@
     },
     "tail": [
       "  temps  choice 1.04  score 0.98  noul 1.02",
-      "  prefill_ms_per_state 15.37  ms_per_question_batched 0.70",
-      "METRICS {\"train_steps\": 30, \"train_wall_s\": 18.578635861000294, \"train_cpu_s\": 19.248557878, \"train_cpu_util\": 1.0360587301463822, \"train_peak_extra_mib\": 424.6015625, \"infer_wall_s\": 0.3009079599996767, \"infer_cpu_s\": 0.30960238700000176, \"infer_cpu_util\": 1.0288939747567143, \"infer_peak_extra_mib\": 13.33984375, \"prefill_ms_per_state\": 15.373334200012323, \"ms_per_question_batched\": 0.6957648718753262, \"params\": 368931, \"stored_bytes\": 737862.0, \"ram_weights_bytes\": 1497996, \"checkpoint_bytes\": 1495288, \"choice_acc\": 0.2578125}"
+      "  prefill_ms_per_state 16.95  ms_per_question_batched 0.81",
+      "METRICS {\"train_steps\": 30, \"train_wall_s\": 19.03572008099991, \"train_cpu_s\": 19.667048277000003, \"train_cpu_util\": 1.0331654486047124, \"train_peak_extra_mib\": 425.640625, \"infer_wall_s\": 0.3466797470000529, \"infer_cpu_s\": 0.35702779800000073, \"infer_cpu_util\": 1.0298490208600108, \"infer_peak_extra_mib\": 14.8203125, \"prefill_ms_per_state\": 16.94753500000843, \"ms_per_question_batched\": 0.8133767031246464, \"params\": 368931, \"stored_bytes\": 737862.0, \"ram_weights_bytes\": 1497996, \"checkpoint_bytes\": 1495288, \"choice_acc\": 0.2578125}"
     ]
   },
   {
@@ -242,22 +242,22 @@
       "mamba2"
     ],
     "ok": true,
-    "wall_s": 19.834324235000167,
-    "cpu_s": 20.134409,
-    "cpu_util": 1.0151295683908552,
-    "peak_rss_mib": 1143.8203125,
+    "wall_s": 20.233743599000036,
+    "cpu_s": 20.700003,
+    "cpu_util": 1.0230436547106887,
+    "peak_rss_mib": 1141.39453125,
     "metrics": {
       "train_steps": 30,
-      "train_wall_s": 14.54135118999966,
-      "train_cpu_s": 15.043763826,
-      "train_cpu_util": 1.0345506156502058,
-      "train_peak_extra_mib": 372.78515625,
-      "infer_wall_s": 0.22851402200012672,
-      "infer_cpu_s": 0.23333403100000183,
-      "infer_cpu_util": 1.0210928369195325,
-      "infer_peak_extra_mib": 14.4140625,
-      "prefill_ms_per_state": 9.489057999962824,
-      "ms_per_question_batched": 0.5604314250007292,
+      "train_wall_s": 15.145718807000094,
+      "train_cpu_s": 15.679787967000001,
+      "train_cpu_util": 1.0352620543670117,
+      "train_peak_extra_mib": 370.25390625,
+      "infer_wall_s": 0.28303507099985836,
+      "infer_cpu_s": 0.2980648269999975,
+      "infer_cpu_util": 1.053102097726068,
+      "infer_peak_extra_mib": 14.359375,
+      "prefill_ms_per_state": 10.66772399999536,
+      "ms_per_question_batched": 0.711422734374878,
       "params": 281883,
       "stored_bytes": 390966.0,
       "ram_weights_bytes": 1149804,
@@ -266,8 +266,8 @@
     },
     "tail": [
       "  temps  choice 1.03  score 0.97  noul 1.02",
-      "  prefill_ms_per_state 9.49  ms_per_question_batched 0.56",
-      "METRICS {\"train_steps\": 30, \"train_wall_s\": 14.54135118999966, \"train_cpu_s\": 15.043763826, \"train_cpu_util\": 1.0345506156502058, \"train_peak_extra_mib\": 372.78515625, \"infer_wall_s\": 0.22851402200012672, \"infer_cpu_s\": 0.23333403100000183, \"infer_cpu_util\": 1.0210928369195325, \"infer_peak_extra_mib\": 14.4140625, \"prefill_ms_per_state\": 9.489057999962824, \"ms_per_question_batched\": 0.5604314250007292, \"params\": 281883, \"stored_bytes\": 390966.0, \"ram_weights_bytes\": 1149804, \"checkpoint_bytes\": 1176839, \"choice_acc\": 0.27734375}"
+      "  prefill_ms_per_state 10.67  ms_per_question_batched 0.71",
+      "METRICS {\"train_steps\": 30, \"train_wall_s\": 15.145718807000094, \"train_cpu_s\": 15.679787967000001, \"train_cpu_util\": 1.0352620543670117, \"train_peak_extra_mib\": 370.25390625, \"infer_wall_s\": 0.28303507099985836, \"infer_cpu_s\": 0.2980648269999975, \"infer_cpu_util\": 1.053102097726068, \"infer_peak_extra_mib\": 14.359375, \"prefill_ms_per_state\": 10.66772399999536, \"ms_per_question_batched\": 0.711422734374878, \"params\": 281883, \"stored_bytes\": 390966.0, \"ram_weights_bytes\": 1149804, \"checkpoint_bytes\": 1176839, \"choice_acc\": 0.27734375}"
     ]
   },
   {
@@ -276,24 +276,24 @@
       "examples/05_pack_and_helion.py"
     ],
     "ok": true,
-    "wall_s": 16.842406906999713,
-    "cpu_s": 17.051199,
-    "cpu_util": 1.0123968084937738,
-    "peak_rss_mib": 1060.0234375,
+    "wall_s": 15.39570579500014,
+    "cpu_s": 15.579640999999999,
+    "cpu_util": 1.0119471758845635,
+    "peak_rss_mib": 1054.43359375,
     "metrics": {
       "train_steps": 60,
-      "train_wall_s": 5.886457392000011,
-      "train_cpu_s": 6.08666086,
-      "train_cpu_util": 1.0340108582578167,
-      "train_peak_extra_mib": 107.0703125,
-      "infer_torch_wall_s": 0.11303622000014002,
-      "infer_torch_cpu_s": 0.1161024219999991,
-      "infer_torch_cpu_util": 1.0271258363014553,
-      "infer_torch_peak_extra_mib": 22.51171875,
-      "infer_helion_wall_s": 6.1618692609999925,
-      "infer_helion_cpu_s": 6.295371312,
-      "infer_helion_cpu_util": 1.0216658363469306,
-      "infer_helion_peak_extra_mib": 171.79296875,
+      "train_wall_s": 5.279302074000043,
+      "train_cpu_s": 5.446693673,
+      "train_cpu_util": 1.0317071455002247,
+      "train_peak_extra_mib": 105.62890625,
+      "infer_torch_wall_s": 0.11493272099983187,
+      "infer_torch_cpu_s": 0.11876302599999988,
+      "infer_torch_cpu_util": 1.0333264971615317,
+      "infer_torch_peak_extra_mib": 23.23828125,
+      "infer_helion_wall_s": 5.712391947000015,
+      "infer_helion_cpu_s": 5.80585703,
+      "infer_helion_cpu_util": 1.0163618119812439,
+      "infer_helion_peak_extra_mib": 167.296875,
       "ram_weights_bytes": 140000,
       "checkpoint_bytes": 163769,
       "stored_bytes": 103392.0
@@ -302,6 +302,192 @@
       "  unpacked  [28, 4, 3, 11, 19, 13, 12, 21] | [8, 12, 21, 12, 12, 21, 8, 12, 21, 8, 12, 0, 20, 12, 0, 9, 13, 12, 0, 20, 2, 4, 11, 25]   (legal under the true chain: 14/48)",
       "  torch     [28, 4, 3, 11, 19, 13, 12, 21] | [8, 12, 21, 12, 12, 21, 8, 12, 21, 8, 12, 0, 20, 12, 0, 9, 13, 12, 0, 20, 2, 4, 11, 25]   (legal under the true chain: 14/48)",
       "  helion    [28, 4, 3, 11, 19, 13, 12, 21] | [8, 12, 21, 12, 12, 21, 8, 12, 21, 8, 12, 0, 20, 12, 0, 9, 13, 12, 0, 20, 2, 4, 11, 25]   (legal under the true chain: 14/48)"
+    ]
+  },
+  {
+    "name": "06 looped LM, FP",
+    "cmd": [
+      "examples/06_looped_reasoning_lm.py"
+    ],
+    "ok": true,
+    "wall_s": 12.97928640799978,
+    "cpu_s": 13.315255,
+    "cpu_util": 1.0258849817654958,
+    "peak_rss_mib": 924.0625,
+    "metrics": {
+      "train_steps": 40,
+      "train_wall_s": 9.341341163999914,
+      "train_cpu_s": 9.721991566,
+      "train_cpu_util": 1.0407490097318204,
+      "train_peak_extra_mib": 264.62109375,
+      "infer_adaptive_wall_s": 0.1479884520001633,
+      "infer_adaptive_cpu_s": 0.1526236789999995,
+      "infer_adaptive_cpu_util": 1.03132154527727,
+      "infer_adaptive_peak_extra_mib": 21.671875,
+      "adaptive_mean_steps": 6.0068359375,
+      "depth_curve": {
+        "1": 3.2334781885147095,
+        "2": 3.1447924375534058,
+        "4": 3.119619607925415,
+        "8": 3.117724061012268,
+        "16": 3.1176260709762573
+      },
+      "ram_weights_bytes": 1886976,
+      "checkpoint_bytes": 1904080,
+      "stored_bytes": 943488.0,
+      "params": 471744
+    },
+    "tail": [
+      "   (analytic forward FLOPs. Both routes run r sequential passes, but the loop runs only the core, adds no cache",
+      "    and emits nothing; the token route also needs a model trained to produce useful thoughts)",
+      "METRICS {\"train_steps\": 40, \"train_wall_s\": 9.341341163999914, \"train_cpu_s\": 9.721991566, \"train_cpu_util\": 1.0407490097318204, \"train_peak_extra_mib\": 264.62109375, \"infer_adaptive_wall_s\": 0.1479884520001633, \"infer_adaptive_cpu_s\": 0.1526236789999995, \"infer_adaptive_cpu_util\": 1.03132154527727, \"infer_adaptive_peak_extra_mib\": 21.671875, \"adaptive_mean_steps\": 6.0068359375, \"depth_curve\": {\"1\": 3.2334781885147095, \"2\": 3.1447924375534058, \"4\": 3.119619607925415, \"8\": 3.117724061012268, \"16\": 3.1176260709762573}, \"ram_weights_bytes\": 1886976, \"checkpoint_bytes\": 1904080, \"stored_bytes\": 943488.0, \"params\": 471744}"
+    ]
+  },
+  {
+    "name": "06 looped LM, LittleBit core",
+    "cmd": [
+      "examples/06_looped_reasoning_lm.py",
+      "--core-linear",
+      "littlebit"
+    ],
+    "ok": true,
+    "wall_s": 15.314084611999988,
+    "cpu_s": 15.595002000000001,
+    "cpu_util": 1.0183437270406543,
+    "peak_rss_mib": 959.03125,
+    "metrics": {
+      "train_steps": 40,
+      "train_wall_s": 10.834919382999942,
+      "train_cpu_s": 11.171626546,
+      "train_cpu_util": 1.0310761115148077,
+      "train_peak_extra_mib": 292.09375,
+      "infer_adaptive_wall_s": 0.1558824740000091,
+      "infer_adaptive_cpu_s": 0.1664947399999992,
+      "infer_adaptive_cpu_util": 1.0680786346769777,
+      "infer_adaptive_peak_extra_mib": 16.70703125,
+      "adaptive_mean_steps": 6.5341796875,
+      "depth_curve": {
+        "1": 3.268501043319702,
+        "2": 3.1632373332977295,
+        "4": 3.1320736408233643,
+        "8": 3.129451870918274,
+        "16": 3.129430890083313
+      },
+      "ram_weights_bytes": 1422880,
+      "checkpoint_bytes": 1478753,
+      "stored_bytes": 528560.0,
+      "params": 355720
+    },
+    "tail": [
+      "   (analytic forward FLOPs. Both routes run r sequential passes, but the loop runs only the core, adds no cache",
+      "    and emits nothing; the token route also needs a model trained to produce useful thoughts)",
+      "METRICS {\"train_steps\": 40, \"train_wall_s\": 10.834919382999942, \"train_cpu_s\": 11.171626546, \"train_cpu_util\": 1.0310761115148077, \"train_peak_extra_mib\": 292.09375, \"infer_adaptive_wall_s\": 0.1558824740000091, \"infer_adaptive_cpu_s\": 0.1664947399999992, \"infer_adaptive_cpu_util\": 1.0680786346769777, \"infer_adaptive_peak_extra_mib\": 16.70703125, \"adaptive_mean_steps\": 6.5341796875, \"depth_curve\": {\"1\": 3.268501043319702, \"2\": 3.1632373332977295, \"4\": 3.1320736408233643, \"8\": 3.129451870918274, \"16\": 3.129430890083313}, \"ram_weights_bytes\": 1422880, \"checkpoint_bytes\": 1478753, \"stored_bytes\": 528560.0, \"params\": 355720}"
+    ]
+  },
+  {
+    "name": "06 looped LM, Ouro exit gate",
+    "cmd": [
+      "examples/06_looped_reasoning_lm.py",
+      "--exit-gate"
+    ],
+    "ok": true,
+    "wall_s": 15.161690549000014,
+    "cpu_s": 15.447833,
+    "cpu_util": 1.0188727272908797,
+    "peak_rss_mib": 989.78515625,
+    "metrics": {
+      "train_steps": 40,
+      "train_wall_s": 11.280372422000028,
+      "train_cpu_s": 11.630743836999999,
+      "train_cpu_util": 1.0310602701659606,
+      "train_peak_extra_mib": 330.23046875,
+      "infer_adaptive_wall_s": 0.06405683500020132,
+      "infer_adaptive_cpu_s": 0.06594487799999982,
+      "infer_adaptive_cpu_util": 1.0294744971366845,
+      "infer_adaptive_peak_extra_mib": 15.91015625,
+      "adaptive_mean_steps": 2.13330078125,
+      "depth_curve": {
+        "1": 3.196755528450012,
+        "2": 3.140547275543213,
+        "4": 3.123160481452942,
+        "8": 3.123171329498291,
+        "16": 3.123189687728882
+      },
+      "ram_weights_bytes": 1887364,
+      "checkpoint_bytes": 1905034,
+      "stored_bytes": 943682.0,
+      "params": 471841
+    },
+    "tail": [
+      "   (analytic forward FLOPs. Both routes run r sequential passes, but the loop runs only the core, adds no cache",
+      "    and emits nothing; the token route also needs a model trained to produce useful thoughts)",
+      "METRICS {\"train_steps\": 40, \"train_wall_s\": 11.280372422000028, \"train_cpu_s\": 11.630743836999999, \"train_cpu_util\": 1.0310602701659606, \"train_peak_extra_mib\": 330.23046875, \"infer_adaptive_wall_s\": 0.06405683500020132, \"infer_adaptive_cpu_s\": 0.06594487799999982, \"infer_adaptive_cpu_util\": 1.0294744971366845, \"infer_adaptive_peak_extra_mib\": 15.91015625, \"adaptive_mean_steps\": 2.13330078125, \"depth_curve\": {\"1\": 3.196755528450012, \"2\": 3.140547275543213, \"4\": 3.123160481452942, \"8\": 3.123171329498291, \"16\": 3.123189687728882}, \"ram_weights_bytes\": 1887364, \"checkpoint_bytes\": 1905034, \"stored_bytes\": 943682.0, \"params\": 471841}"
+    ]
+  },
+  {
+    "name": "07 byte-level: baseline / BLT / H-Net",
+    "cmd": [
+      "examples/07_byte_level_patching.py"
+    ],
+    "ok": true,
+    "wall_s": 46.348403296000015,
+    "cpu_s": 47.669671,
+    "cpu_util": 1.028507297124387,
+    "peak_rss_mib": 1034.109375,
+    "metrics": {
+      "train_steps": 30,
+      "models": {
+        "byte transformer (no patching)": {
+          "bits_per_byte": 4.536206831920802,
+          "bytes_per_patch": 1.0,
+          "params": 692096,
+          "train_wall_s": 7.66390254099997,
+          "train_cpu_s": 7.885302576999999,
+          "train_cpu_util": 1.0288886810362727,
+          "train_peak_extra_mib": 232.296875,
+          "infer_wall_s": 0.08915257800003928,
+          "infer_cpu_s": 0.09239441300000095,
+          "infer_cpu_util": 1.0363627734910845,
+          "infer_peak_extra_mib": 27.13671875,
+          "checkpoint_bytes": 2779398,
+          "stored_bytes": 1384192.0
+        },
+        "BLT (entropy patches)": {
+          "bits_per_byte": 4.78419721533243,
+          "bytes_per_patch": 4.371398078975454,
+          "params": 1737808,
+          "train_wall_s": 8.315029977999984,
+          "train_cpu_s": 8.601497541999999,
+          "train_cpu_util": 1.0344517776553968,
+          "train_peak_extra_mib": 223.25390625,
+          "infer_wall_s": 0.09273951099999067,
+          "infer_cpu_s": 0.09545669699999948,
+          "infer_cpu_util": 1.0292991193366232,
+          "infer_peak_extra_mib": 42.7890625,
+          "checkpoint_bytes": 6973705,
+          "stored_bytes": 3475616.0
+        },
+        "H-Net (learned chunks)": {
+          "bits_per_byte": 4.251799122188976,
+          "bytes_per_patch": 2.5924050632911393,
+          "params": 613240,
+          "train_wall_s": 26.843588630999875,
+          "train_cpu_s": 27.746903776999996,
+          "train_cpu_util": 1.033651057554836,
+          "train_peak_extra_mib": 351.2578125,
+          "infer_wall_s": 0.0907994020001297,
+          "infer_cpu_s": 0.0937997320000008,
+          "infer_cpu_util": 1.0330434995581448,
+          "infer_peak_extra_mib": 43.93359375,
+          "checkpoint_bytes": 2472568,
+          "stored_bytes": 1226480.0
+        }
+      }
+    },
+    "tail": [
+      "",
+      "for scale: a 200k-token vocabulary needs 51,200,000 embedding + head params at d=128; bytes need 65,536.",
+      "METRICS {\"train_steps\": 30, \"models\": {\"byte transformer (no patching)\": {\"bits_per_byte\": 4.536206831920802, \"bytes_per_patch\": 1.0, \"params\": 692096, \"train_wall_s\": 7.66390254099997, \"train_cpu_s\": 7.885302576999999, \"train_cpu_util\": 1.0288886810362727, \"train_peak_extra_mib\": 232.296875, \"infer_wall_s\": 0.08915257800003928, \"infer_cpu_s\": 0.09239441300000095, \"infer_cpu_util\": 1.0363627734910845, \"infer_peak_extra_mib\": 27.13671875, \"checkpoint_bytes\": 2779398, \"stored_bytes\": 1384192.0}, \"BLT (entropy patches)\": {\"bits_per_byte\": 4.78419721533243, \"bytes_per_patch\": 4.371398078975454, \"params\": 1737808, \"train_wall_s\": 8.315029977999984, \"train_cpu_s\": 8.601497541999999, \"train_cpu_util\": 1.0344517776553968, \"train_peak_extra_mib\": 223.25390625, \"infer_wall_s\": 0.09273951099999067, \"infer_cpu_s\": 0.09545669699999948, \"infer_cpu_util\": 1.0292991193366232, \"infer_peak_extra_mib\": 42.7890625, \"checkpoint_bytes\": 6973705, \"stored_bytes\": 3475616.0}, \"H-Net (learned chunks)\": {\"bits_per_byte\": 4.251799122188976, \"bytes_per_patch\": 2.5924050632911393, \"params\": 613240, \"train_wall_s\": 26.843588630999875, \"train_cpu_s\": 27.746903776999996, \"train_cpu_util\": 1.033651057554836, \"train_peak_extra_mib\": 351.2578125, \"infer_wall_s\": 0.0907994020001297, \"infer_cpu_s\": 0.0937997320000008, \"infer_cpu_util\": 1.0330434995581448, \"infer_peak_extra_mib\": 43.93359375, \"checkpoint_bytes\": 2472568, \"stored_bytes\": 1226480.0}}}"
     ]
   }
 ]

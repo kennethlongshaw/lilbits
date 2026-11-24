@@ -31,13 +31,19 @@ RUNS = [
     ("04 decision, FP GDN", ["examples/04_decision_model.py", "--linear", "fp"]),
     ("04 decision, LittleBit Mamba2", ["examples/04_decision_model.py", "--mixer", "mamba2"]),
     ("05 pack + Helion (interpret)", ["examples/05_pack_and_helion.py"]),
+    ("06 looped LM, FP", ["examples/06_looped_reasoning_lm.py"]),
+    ("06 looped LM, LittleBit core", ["examples/06_looped_reasoning_lm.py", "--core-linear", "littlebit"]),
+    ("06 looped LM, Ouro exit gate", ["examples/06_looped_reasoning_lm.py", "--exit-gate"]),
+    ("07 byte-level: baseline / BLT / H-Net", ["examples/07_byte_level_patching.py"]),
 ]
 
 
 def run(cmd: list[str], env: dict) -> dict:
     t0 = time.perf_counter()
-    p = subprocess.Popen([sys.executable, *cmd], cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         text=True)
+    p = subprocess.Popen(
+        [sys.executable, *cmd], cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    assert p.stdout is not None
     out = p.stdout.read()
     _, status, ru = os.wait4(p.pid, 0)  # per-child rusage: CPU times and peak RSS of exactly this process
     wall = time.perf_counter() - t0
@@ -45,34 +51,65 @@ def run(cmd: list[str], env: dict) -> dict:
     metrics = {}
     for line in out.splitlines():
         if line.startswith("METRICS "):
-            metrics = json.loads(line[len("METRICS "):])
-    return {"ok": os.waitstatus_to_exitcode(status) == 0, "wall_s": wall, "cpu_s": cpu, "cpu_util": cpu / wall,
-            "peak_rss_mib": ru.ru_maxrss / 1024, "metrics": metrics, "tail": out.strip().splitlines()[-3:]}
+            metrics = json.loads(line[len("METRICS ") :])
+    return {
+        "ok": os.waitstatus_to_exitcode(status) == 0,
+        "wall_s": wall,
+        "cpu_s": cpu,
+        "cpu_util": cpu / wall,
+        "peak_rss_mib": ru.ru_maxrss / 1024,
+        "metrics": metrics,
+        "tail": out.strip().splitlines()[-3:],
+    }
 
 
 def table(rows: list[dict]) -> str:
     f = lambda v, fmt: "" if v is None else fmt.format(v)
     kib = lambda v: f(v / 1024 if v is not None else None, "{:,.0f} KiB")
-    lines = ["| example | ok | process wall | process CPU (util) | process peak RSS | train wall / CPU | train peak RSS growth "
-             "| inference (example's own measure) | RAM weights | checkpoint file | stored size |",
-             "|---" * 11 + "|"]
+    lines = [
+        "| example | ok | process wall | process CPU (util) | process peak RSS | train wall / CPU "
+        "| train peak RSS growth "
+        "| inference (example's own measure) | RAM weights | checkpoint file | stored size |",
+        "|---" * 11 + "|",
+    ]
     for r in rows:
         m = r["metrics"]
-        if "ms_per_question_batched" in m:
-            infer = f"{m['prefill_ms_per_state']:.1f} ms prefill / state, {m['ms_per_question_batched']:.2f} ms / question"
+        if "models" in m:  # several models in one example: summarise each
+            infer = "; ".join(
+                f"{k.split(' (')[0]}: {v['bits_per_byte']:.2f} bpb, {v['bytes_per_patch']:.1f} B/patch, "
+                f"train {v['train_wall_s']:.1f}s, infer {v['infer_wall_s'] * 1e3:.0f} ms, "
+                f"{v['stored_bytes'] / 1024:,.0f} KiB"
+                for k, v in m["models"].items()
+            )
+        elif "ms_per_question_batched" in m:
+            infer = (
+                f"{m['prefill_ms_per_state']:.1f} ms prefill / state, {m['ms_per_question_batched']:.2f} ms / question"
+            )
+        elif "adaptive_mean_steps" in m:
+            infer = (
+                f"adaptive exit: {m['adaptive_mean_steps']:.1f} loops / position, "
+                f"{m['infer_adaptive_wall_s'] * 1e3:.0f} ms per 32×63 batch"
+            )
         elif "infer_torch_wall_s" in m:
-            infer = (f"eval + generate: torch {m['infer_torch_wall_s']:.2f} s, Helion (interpret) "
-                     f"{m['infer_helion_wall_s']:.2f} s wall")
+            infer = (
+                f"eval + generate: torch {m['infer_torch_wall_s']:.2f} s, Helion (interpret) "
+                f"{m['infer_helion_wall_s']:.2f} s wall"
+            )
         elif "infer_ms_per_batch" in m:
             infer = f"{m['infer_ms_per_batch']:.1f} ms wall, {m['infer_cpu_ms_per_batch']:.1f} ms CPU per 32×63 batch"
         else:
             infer = ""
-        train = (f"{m['train_wall_s']:.1f} s / {m['train_cpu_s']:.1f} s ({m['train_steps']} steps)"
-                 if "train_wall_s" in m else "")
+        train = (
+            f"{m['train_wall_s']:.1f} s / {m['train_cpu_s']:.1f} s ({m['train_steps']} steps)"
+            if "train_wall_s" in m
+            else ""
+        )
         lines.append(
-            f"| {r['name']} | {'✅' if r['ok'] else '❌'} | {r['wall_s']:.1f} s | {r['cpu_s']:.1f} s ({r['cpu_util']:.2f}) "
+            f"| {r['name']} | {'✅' if r['ok'] else '❌'} | {r['wall_s']:.1f} s "
+            f"| {r['cpu_s']:.1f} s ({r['cpu_util']:.2f}) "
             f"| {r['peak_rss_mib']:.0f} MiB | {train} | {f(m.get('train_peak_extra_mib'), '{:.0f} MiB')} | {infer} "
-            f"| {kib(m.get('ram_weights_bytes'))} | {kib(m.get('checkpoint_bytes'))} | {kib(m.get('stored_bytes'))} |")
+            f"| {kib(m.get('ram_weights_bytes'))} | {kib(m.get('checkpoint_bytes'))} | {kib(m.get('stored_bytes'))} |"
+        )
     return "\n".join(lines)
 
 
@@ -89,8 +126,11 @@ def main(argv=None):
             continue
         r = {"name": name, "cmd": cmd, **run(cmd, env)}
         rows.append(r)
-        print(f"{name}: {'ok' if r['ok'] else 'FAILED'}  {r['wall_s']:.1f}s wall  {r['cpu_s']:.1f}s CPU  "
-              f"{r['peak_rss_mib']:.0f} MiB peak", flush=True)
+        print(
+            f"{name}: {'ok' if r['ok'] else 'FAILED'}  {r['wall_s']:.1f}s wall  {r['cpu_s']:.1f}s CPU  "
+            f"{r['peak_rss_mib']:.0f} MiB peak",
+            flush=True,
+        )
         if not r["ok"]:
             print("   " + "\n   ".join(r["tail"]))
     md = table(rows)

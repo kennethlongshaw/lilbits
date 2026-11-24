@@ -62,3 +62,20 @@ class TextSource:
     def sample(self, batch: int, seq_len: int) -> torch.Tensor:
         ix = torch.randint(0, len(self.data) - seq_len - 1, (batch,), generator=self._g)
         return torch.stack([self.data[i : i + seq_len + 1] for i in ix])
+
+
+class ByteSource:
+    """Raw UTF-8 bytes (vocab 256, no tokenizer) from files or a bytes object, for byte-level models."""
+
+    vocab = 256
+
+    def __init__(self, data: bytes | str | list[str], seed: int = 0):
+        if isinstance(data, (str, list)):
+            paths = [data] if isinstance(data, str) else data
+            data = b"".join(open(p, "rb").read() for p in paths)
+        self.data = torch.frombuffer(bytearray(data), dtype=torch.uint8).long()
+        self._g = torch.Generator().manual_seed(seed)
+
+    def sample(self, batch: int, seq_len: int) -> torch.Tensor:
+        ix = torch.randint(0, len(self.data) - seq_len - 1, (batch,), generator=self._g)
+        return torch.stack([self.data[i : i + seq_len + 1] for i in ix])
