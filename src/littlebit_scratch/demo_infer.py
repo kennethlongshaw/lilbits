@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from .data import MarkovSource
 from .model import Config
 from .packed import model_bytes, pack_model, set_backend
-from .train import train
+from .train import TrainConfig, train
 
 
 @torch.no_grad()
@@ -51,8 +51,8 @@ def main(argv=None):
                  bpw=args.bpw, itq_iters=50)
     print(f"1) training LittleBit ({args.bpw} bpw) for {args.steps} steps ({args.fp_warmup} FP warm start)...", flush=True)
     t = time.time()
-    res = train(cfg, src, args.steps, 32, 3e-3, dev, log_every=args.steps, latent_lr_mult=0.1,
-                fp_warmup=args.fp_warmup, verbose=False)
+    res = train(cfg, TrainConfig(steps=args.steps, log_every=args.steps, fp_warmup=args.fp_warmup, verbose=False,
+                                 accelerator="cuda" if dev == "cuda" else "cpu"), src)
     model = res["model"].eval()
     print(f"   done in {time.time() - t:.0f}s, eval loss {res['final_eval']:.4f}")
 

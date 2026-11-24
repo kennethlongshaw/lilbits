@@ -6,7 +6,7 @@ import torch
 from littlebit_scratch.data import MarkovSource
 from littlebit_scratch.littlebit import LittleBitLinear
 from littlebit_scratch.model import Config, TinyLM, TransformerBlock, compression_report, make_linear_factory
-from littlebit_scratch.train import train
+from littlebit_scratch.train import TrainConfig, train
 
 TINY = dict(vocab_size=16, seq_len=16, d_model=32, n_heads=2, n_layers=1)
 
@@ -51,8 +51,7 @@ def test_training_from_scratch_learns(linear):
     src = MarkovSource(vocab=8, order=1, branching=2, seed=0)
     cfg = Config(vocab_size=8, seq_len=16, d_model=32, n_heads=2, n_layers=1, linear=linear,
                  bpw=2.0, residual=False, ste="clipped")
-    res = train(cfg, src, steps=300, batch=32, lr=3e-3, device="cpu", log_every=100,
-                latent_lr_mult=0.1, verbose=False)
+    res = train(cfg, TrainConfig(steps=300, batch=32, lr=3e-3, log_every=100, latent_lr_mult=0.1, verbose=False, accelerator="cpu"), src)
     eval_b = res["history"]
     assert eval_b[-1]["eval"] < eval_b[0]["eval"] - 0.3
     assert eval_b[-1]["eval"] < math.log(8) - 0.3
@@ -62,7 +61,7 @@ def test_muon_gets_2d_block_matrices_only():
     from littlebit_scratch.train import make_optimizers
 
     model = TinyLM(Config(vocab_size=16, seq_len=16, d_model=64, n_heads=2, n_layers=1, linear="littlebit", bpw=4.0))
-    muon, adam = make_optimizers(model, 1e-3, 1.0, 0.0, 0.1, optim="muon")
+    muon, adam = make_optimizers(model, TrainConfig(lr=1e-3, optim="muon"))
     assert isinstance(muon, torch.optim.Muon) and isinstance(adam, torch.optim.AdamW)
     muon_params = [p for g in muon.param_groups for p in g["params"]]
     assert muon_params and all(p.dim() == 2 for p in muon_params)
@@ -78,6 +77,5 @@ def test_training_with_muon_learns():
     src = MarkovSource(vocab=8, order=1, branching=2, seed=0)
     cfg = Config(vocab_size=8, seq_len=16, d_model=32, n_heads=2, n_layers=1, linear="littlebit",
                  bpw=2.0, residual=False)
-    res = train(cfg, src, steps=300, batch=32, lr=3e-3, device="cpu", log_every=100,
-                latent_lr_mult=1.0, optim="muon", verbose=False)
+    res = train(cfg, TrainConfig(steps=300, batch=32, lr=3e-3, log_every=100, latent_lr_mult=1.0, optim="muon", verbose=False, accelerator="cpu"), src)
     assert res["history"][-1]["eval"] < math.log(8) - 0.3

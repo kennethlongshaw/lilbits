@@ -16,7 +16,7 @@ W_hat = diag(h) · sign(U) · diag(l) · sign(V)^T · diag(g)        U: out×r, 
 
 - `U`, `V` are full-precision *latent* factors, binarized to ±1 in the forward pass.
 - `h` (row), `g` (column) and `l` (latent) are learned FP16 scale vectors.
-- Optional residual factorization adds a second path with its own factors (`--no-residual` turns it off).
+- Optional residual factorization adds a second path with its own factors (`--model.residual false` turns it off).
 - The forward pass never builds `W`: scales fold into the factors, `A = g·sign(V)·l`, `B = h·sign(U)` (paths concatenated), then `y = x @ A @ Bᵀ`.
 - Bits/weight = paths · (r·(in+out) + 16·(in+out+r)) / (in·out). `rank_for_bpw` picks the rank for a target.
 - Sign gradients use a straight-through estimator: `clipped` (identity inside |x|≤1, the default here) or
@@ -33,7 +33,7 @@ variance-preserving, and the model is trained on the next-token loss directly. S
 apply, so it's left out.
 
 Two things mattered for from-scratch training: a lower learning rate on the latent factors than on
-everything else (`--latent-lr-mult 0.1`, otherwise signs churn ~20% per 100 steps and nothing learns),
+everything else (`--train.latent_lr_mult 0.1`, the default; otherwise signs churn ~20% per 100 steps and nothing learns),
 and the clipped STE, which beat SmoothSign (k=100 or 10) in short CPU sweeps.
 
 ## Setup
@@ -46,9 +46,12 @@ uv run pytest
 ## Training
 
 ```bash
-uv run lb-train --linear both --steps 1500                     # FP baseline, then LittleBit @ ~1 bpw
-uv run lb-train --linear littlebit --bpw 0.55 --device cuda --d-model 1024 --n-layers 6 --steps 20000
-uv run lb-train --text input.txt --linear both --device cuda   # char-level LM on any text file
+uv run lb-train --linear both --train.steps 1500             # FP baseline, then LittleBit @ ~1 bpw
+uv run lb-train --linear littlebit --model.bpw 0.55 --model.d_model 1024 --model.n_layers 6 \
+    --train.steps 20000 --train.accelerator cuda --train.precision bf16-mixed
+uv run lb-train --text input.txt --linear both               # char-level LM on any text file
+uv run lb-train --print_config > run.yaml && uv run lb-train --config run.yaml   # YAML configs
+uv run lb-train --help                                       # every model.* / train.* option
 ```
 
 The default data is a random sparse order-2 Markov chain (vocab 32, 4 successors per context), so the
@@ -71,18 +74,28 @@ At these tiny widths the FP16 scales eat a big part of the bit budget (a 128×12
 rank 15 per residual path), so sub-1-bit is much more forgiving at real model widths: a 4096×4096 layer at
 0.1 bpw still gets rank 86 per path. Scale up `--d-model` on a GPU to test that regime.
 
-## Initialization (`--init`, `--itq`, `--fp-warmup`)
+### Lightning Fabric
+
+Training runs on [Lightning Fabric](https://lightning.ai/docs/fabric/stable/): Fabric owns device placement,
+`fabric.backward`, gradient clipping, seeding, precision and multi-device setup, so the loop has no `.to(device)`
+calls. Options live in two dataclasses, `Config` (model) and `TrainConfig` (optimization + Fabric), and the
+`lb-train` CLI is generated from them by jsonargparse (also gives `--config run.yaml` / `--print_config`).
+Programmatic use: `train(Config(...), TrainConfig(...), source)`.
+
+Fabric options: `--train.accelerator auto|cpu|cuda|mps`, `--train.devices N`, `--train.precision 32-true|bf16-mixed|16-mixed`.
+
+## Initialization (`--model.init`, `--model.itq_iters`, `--train.fp_warmup`)
 
 - `small` (default): latents ~ N(0, 0.1), scales set for unit variance.
 - `bimodal`: latents at ±0.5 plus noise, so none start near the sign-flip point at zero.
 - `svd`: no teacher, so take the dense matrix `nn.Linear` would have started from, and initialize from its
   SVD the way the paper does (Dual-SVID: `U√S`, `V√S`, rank-1 fits of their magnitudes give `h, g, l`;
   the residual path fits what's left). The result is rescaled to the dense init's norm.
-- `--itq N`: LittleBit-2's Joint-ITQ. Before binarizing, rotate both factors by one orthogonal `R`
+- `--model.itq_iters N`: LittleBit-2's Joint-ITQ. Before binarizing, rotate both factors by one orthogonal `R`
   (`UVᵀ = (UR)(VR)ᵀ`, so the FP product is unchanged) chosen to push entries toward ±1 and away from zero.
-- `--fp-warmup N`: train a full-precision copy for the first N steps, then convert it to LittleBit with the
+- `--train.fp_warmup N`: train a full-precision copy for the first N steps, then convert it to LittleBit with the
   SVD(+ITQ) init and keep training. Still from scratch, no external teacher, but it reproduces the paper's
-  "compress a trained model" pipeline. The N steps count toward `--steps`.
+  "compress a trained model" pipeline. The N steps count toward `--train.steps`.
 
 Logs show `sign-flips` (fraction of latent signs that changed since the last log) and `near-zero`
 (fraction of latents within 10% of their rms from zero; a Gaussian gives about 8%).
@@ -101,14 +114,14 @@ Logs show `sign-flips` (fraction of latent signs that changed since the last log
 | FP warm start 300 steps + SVD + ITQ | **1.089**  | 3.2%               | 0.11%                  |
 
 FP16 reference: 0.984. Entropy floor: 0.894. These are single-seed CPU runs, so treat gaps under ~0.05 as
-possibly noise. Run them yourself with e.g. `uv run lb-train --linear littlebit --fp-warmup 300 --itq 50`.
+possibly noise. Run them yourself with e.g. `uv run lb-train --linear littlebit --train.fp_warmup 300 --model.itq_iters 50`.
 
-## Optimizer (`--optim muon`)
+## Optimizer (`--train.optim muon`)
 
-`--optim muon` puts the 2D matrices inside the blocks (FP linear weights, or the LittleBit latents `U`, `V`)
+`--train.optim muon` puts the 2D matrices inside the blocks (FP linear weights, or the LittleBit latents `U`, `V`)
 on `torch.optim.Muon` (PyTorch ≥ 2.9) with `adjust_lr_fn="match_rms_adamw"`, so the same `--lr` applies.
-Embeddings, the LM head, LittleBit scales and norms stay on AdamW (`--muon-embed` moves embeddings/head
-to Muon too). `--latent-lr-mult` and `--muon-lr-mult` still apply.
+Embeddings, the LM head, LittleBit scales and norms stay on AdamW (`--train.muon_embed true` moves embeddings/head
+to Muon too). `--train.latent_lr_mult` and `--train.muon_lr_mult` still apply.
 
 Same setup as above, 1,500 steps, seed 0 (final eval loss):
 
@@ -125,7 +138,7 @@ rotation's work: near-zero latents climb from 3% back to ~10%.
 
 ### Weight decay 0.1 (default is 0)
 
-Same runs with `--weight-decay 0.1` (previous tables used 0). Decay applies to the 2D weights and LittleBit
+Same runs with `--train.weight_decay 0.1` (previous tables used 0). Decay applies to the 2D weights and LittleBit
 latents; scales and norms are never decayed.
 
 | model / init                 | AdamW wd 0 → 0.1 | Muon wd 0 → 0.1 |
@@ -135,14 +148,14 @@ latents; scales and norms are never decayed.
 | LittleBit, svd + ITQ         | 1.179 → 1.180    | 1.198 → 1.199   |
 | LittleBit, FP warm 300 + ITQ | 1.089 → 1.102    | 1.115 → 1.127   |
 
-### DeepSeek-V4 Muon recipe (`--optim muon_ds`, `--qk-norm`)
+### DeepSeek-V4 Muon recipe (`--train.optim muon_ds`, `--model.qk_norm true`)
 
 `src/littlebit_scratch/optim.py` implements DeepSeek-V4's Muon: 10 Newton-Schulz steps (8 with the fast
 coefficients, 2 with (2, -1.5, 0.5) to pin singular values at 1), update RMS 0.18, Nesterov 0.95.
-`--qk-norm` adds RMSNorm on per-head queries/keys (DeepSeek's replacement for QK-Clip).
-`--muon-ns-steps 10` runs stock `torch.optim.Muon` with 10 steps of the fast coefficients only.
+`--model.qk_norm true` adds RMSNorm on per-head queries/keys (DeepSeek's replacement for QK-Clip).
+`--train.muon_ns_steps 10` runs stock `torch.optim.Muon` with 10 steps of the fast coefficients only.
 
-Matched params (`--bpw 1.41`), weight decay 0, 1,500 steps, seed 0. "Steps to" = first eval (every 100 steps)
+Matched params (`--model.bpw 1.41`), weight decay 0, 1,500 steps, seed 0. "Steps to" = first eval (every 100 steps)
 at or below the target. LittleBit rows use the 300-step FP warm start + ITQ (the optimizer also runs the FP phase).
 
 | run | final eval | steps to 1.05 / 1.00 (FP) or 1.15 / 1.10 (LittleBit) | wall time* |
@@ -334,7 +347,7 @@ operands instead of FP32 (±1 is exact in FP16), and fuse the two residual paths
 - `src/littlebit_scratch/littlebit.py`: `LittleBitLinear`, STEs, bpw accounting
 - `src/littlebit_scratch/model.py`: attention, SwiGLU, `TransformerBlock`, `TinyLM`
 - `src/littlebit_scratch/data.py`: Markov source with known entropy floor, char-level text source
-- `src/littlebit_scratch/train.py`: training loop / `lb-train` CLI
+- `src/littlebit_scratch/train.py`: Lightning Fabric training loop, `TrainConfig`, `lb-train` CLI (jsonargparse)
 - `src/littlebit_scratch/optim.py`: DeepSeek-V4-style Muon (hybrid Newton-Schulz)
 - `src/littlebit_scratch/infer_bench.py`: `lb-infer-bench`, inference speed vs nn.Linear
 - `src/littlebit_scratch/packed.py`: bit-packed inference export

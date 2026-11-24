@@ -3,7 +3,7 @@ import torch
 from littlebit_scratch.data import MarkovSource
 from littlebit_scratch.littlebit import LittleBitLinear, joint_itq, zero_margin
 from littlebit_scratch.model import Config, TinyLM, convert_fp_to_littlebit
-from littlebit_scratch.train import train
+from littlebit_scratch.train import TrainConfig, train
 
 
 def _factors(seed=0, out=96, inp=64, r=16):
@@ -76,7 +76,7 @@ def test_train_with_fp_warmup_records_phases():
     src = MarkovSource(vocab=8, order=1, branching=2, seed=0)
     cfg = Config(vocab_size=8, seq_len=16, d_model=32, n_heads=2, n_layers=1, linear="littlebit",
                  bpw=2.0, residual=False, itq_iters=10)
-    res = train(cfg, src, steps=20, batch=8, lr=3e-3, device="cpu", log_every=5, fp_warmup=10, verbose=False)
+    res = train(cfg, TrainConfig(steps=20, batch=8, lr=3e-3, log_every=5, fp_warmup=10, verbose=False, accelerator="cpu"), src)
     phases = [h["phase"] for h in res["history"]]
     assert phases[0] == "fp-warm" and "converted" in phases and phases[-1] == "littlebit"
     assert res["history"][-1]["step"] == 19

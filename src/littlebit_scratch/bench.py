@@ -21,7 +21,7 @@ import torch
 from .data import MarkovSource
 from .littlebit import LittleBitLinear
 from .model import Config, TinyLM
-from .train import train
+from .train import TrainConfig, train
 
 CONFIGS = {
     "fp": dict(linear="fp", optim="adamw", fp_warmup=0, init="small", itq_iters=0,
@@ -92,9 +92,11 @@ def run_one(spec: str, args) -> dict:
     if args.device.startswith("cuda"):
         torch.cuda.reset_peak_memory_stats()
     t0 = time.perf_counter()
-    res = train(cfg, source, args.steps, args.batch, args.lr, args.device, log_every=args.steps,
-                weight_decay=args.weight_decay, latent_lr_mult=0.1, eval_batches=eval_batches, seed=args.seed,
-                verbose=False, fp_warmup=c["fp_warmup"], optim=o["optim"], muon_ns_steps=o["ns"])
+    tc = TrainConfig(steps=args.steps, batch=args.batch, lr=args.lr, log_every=args.steps,
+                     weight_decay=args.weight_decay, latent_lr_mult=0.1, seed=args.seed, verbose=False,
+                     fp_warmup=c["fp_warmup"], optim=o["optim"], muon_ns_steps=o["ns"],
+                     accelerator="cuda" if args.device.startswith("cuda") else "cpu")
+    res = train(cfg, tc, source, eval_batches)
     wall = time.perf_counter() - t0
     train_peak = (torch.cuda.max_memory_allocated() / 2**20 if args.device.startswith("cuda")
                   else _rss_mib() - rss0)
