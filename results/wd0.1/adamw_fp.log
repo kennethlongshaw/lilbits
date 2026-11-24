@@ -1,0 +1,18 @@
+Markov source: uniform loss 3.4657, entropy floor ~0.8945 nats
+[fp       ] step     0  train 3.6124  eval 3.6034  sign-flips 0.0000%  near-zero 0.00%  1s
+[fp       ] step   100  train 2.9616  eval 2.9536  sign-flips 0.0000%  near-zero 0.00%  8s
+[fp       ] step   200  train 1.2574  eval 1.2576  sign-flips 0.0000%  near-zero 0.00%  16s
+[fp       ] step   300  train 1.1230  eval 1.1739  sign-flips 0.0000%  near-zero 0.00%  23s
+[fp       ] step   400  train 1.1123  eval 1.1485  sign-flips 0.0000%  near-zero 0.00%  30s
+[fp       ] step   500  train 1.1000  eval 1.1026  sign-flips 0.0000%  near-zero 0.00%  38s
+[fp       ] step   600  train 1.0614  eval 1.0826  sign-flips 0.0000%  near-zero 0.00%  45s
+[fp       ] step   700  train 1.0003  eval 1.0586  sign-flips 0.0000%  near-zero 0.00%  53s
+[fp       ] step   800  train 1.0197  eval 1.0468  sign-flips 0.0000%  near-zero 0.00%  60s
+[fp       ] step   900  train 1.0224  eval 1.0400  sign-flips 0.0000%  near-zero 0.00%  67s
+[fp       ] step  1000  train 1.0211  eval 1.0249  sign-flips 0.0000%  near-zero 0.00%  75s
+[fp       ] step  1100  train 0.9763  eval 1.0086  sign-flips 0.0000%  near-zero 0.00%  82s
+[fp       ] step  1200  train 0.9788  eval 1.0042  sign-flips 0.0000%  near-zero 0.00%  89s
+[fp       ] step  1300  train 0.9913  eval 0.9949  sign-flips 0.0000%  near-zero 0.00%  97s
+[fp       ] step  1400  train 0.9574  eval 0.9862  sign-flips 0.0000%  near-zero 0.00%  104s
+[fp       ] step  1499  train 1.0186  eval 0.9860  sign-flips 0.0000%  near-zero 0.00%  112s
+[fp] final eval 0.9860 | block linears: 395,264 weights at 16.000 bpw (772.0 KiB)

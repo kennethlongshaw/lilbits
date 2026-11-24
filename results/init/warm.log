@@ -1,0 +1,20 @@
+Markov source: uniform loss 3.4657, entropy floor ~0.8945 nats
+[fp-warm  ] step     0  train 3.6124  eval 3.6034  sign-flips 0.0000%  near-zero 0.00%  1s
+[fp-warm  ] step   100  train 2.9590  eval 2.9510  sign-flips 0.0000%  near-zero 0.00%  9s
+[fp-warm  ] step   200  train 1.2521  eval 1.2545  sign-flips 0.0000%  near-zero 0.00%  17s
+[fp-warm  ] step   299  train 1.1442  eval 1.1716  sign-flips 0.0000%  near-zero 0.00%  25s
+[converted] eval right after SVD conversion: 4.0203  near-zero 7.99%
+[littlebit] step   300  train 3.9574  eval 3.7245  sign-flips 0.0443%  near-zero 7.98%  26s
+[littlebit] step   400  train 1.4213  eval 1.4413  sign-flips 0.8117%  near-zero 8.26%  43s
+[littlebit] step   500  train 1.3257  eval 1.3260  sign-flips 0.5055%  near-zero 8.39%  60s
+[littlebit] step   600  train 1.2337  eval 1.2816  sign-flips 0.4750%  near-zero 8.53%  73s
+[littlebit] step   700  train 1.1704  eval 1.2535  sign-flips 0.4320%  near-zero 8.60%  92s
+[littlebit] step   800  train 1.2012  eval 1.2281  sign-flips 0.4200%  near-zero 8.63%  106s
+[littlebit] step   900  train 1.1950  eval 1.2015  sign-flips 0.3806%  near-zero 8.68%  120s
+[littlebit] step  1000  train 1.1620  eval 1.1956  sign-flips 0.3921%  near-zero 8.68%  133s
+[littlebit] step  1100  train 1.1251  eval 1.1825  sign-flips 0.3704%  near-zero 8.71%  152s
+[littlebit] step  1200  train 1.1392  eval 1.1631  sign-flips 0.3398%  near-zero 8.72%  168s
+[littlebit] step  1300  train 1.1559  eval 1.1594  sign-flips 0.3385%  near-zero 8.72%  181s
+[littlebit] step  1400  train 1.1071  eval 1.1413  sign-flips 0.3057%  near-zero 8.74%  196s
+[littlebit] step  1499  train 1.1934  eval 1.1404  sign-flips 0.3008%  near-zero 8.75%  212s
+[littlebit] final eval 1.1404 | block linears: 395,264 weights at 0.990 bpw (47.8 KiB)

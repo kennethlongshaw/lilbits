@@ -1,0 +1,24 @@
+[project]
+name = "littlebit-scratch"
+version = "0.1.0"
+description = "LittleBit-style sub-1-bit low-rank binarized transformer blocks, trained from scratch"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26", "torch>=2.9"]
+
+[project.scripts]
+lb-train = "littlebit_scratch.train:main"
+lb-bench = "littlebit_scratch.bench:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/littlebit_scratch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

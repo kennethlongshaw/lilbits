@@ -1,0 +1,64 @@
+"""Training data: a synthetic Markov source with a known loss floor, or a text file."""
+
+from __future__ import annotations
+
+import numpy as np
+import torch
+
+
+class MarkovSource:
+    """Random sparse order-`order` Markov chain over `vocab` tokens.
+
+    Each context has `branching` allowed next tokens with Dirichlet weights,
+    so the optimal achievable cross-entropy (the entropy rate) is known and
+    well below log(vocab). A model must use attention to look `order` tokens back.
+    """
+
+    def __init__(self, vocab: int = 64, order: int = 2, branching: int = 4, alpha: float = 0.5, seed: int = 0):
+        rng = np.random.default_rng(seed)
+        self.vocab, self.order = vocab, order
+        n_ctx = vocab**order
+        probs = torch.zeros(n_ctx, vocab)
+        nxt = torch.from_numpy(rng.random((n_ctx, vocab)).argsort(axis=1)[:, :branching])
+        w = torch.from_numpy(rng.dirichlet(np.full(branching, alpha), size=n_ctx)).float()
+        probs.scatter_(1, nxt, w)
+        self.probs = probs
+        self._g = torch.Generator().manual_seed(seed + 1)
+
+    def _ctx_index(self, seq: torch.Tensor, t: int) -> torch.Tensor:
+        idx = torch.zeros(seq.shape[0], dtype=torch.long)
+        for j in range(self.order):
+            idx = idx * self.vocab + seq[:, t - self.order + j]
+        return idx
+
+    def sample(self, batch: int, seq_len: int) -> torch.Tensor:
+        seq = torch.empty(batch, seq_len + 1, dtype=torch.long)
+        seq[:, : self.order] = torch.randint(0, self.vocab, (batch, self.order), generator=self._g)
+        for t in range(self.order, seq_len + 1):
+            p = self.probs[self._ctx_index(seq, t)]
+            seq[:, t] = torch.multinomial(p, 1, generator=self._g).squeeze(1)
+        return seq
+
+    def entropy_floor(self, seq: torch.Tensor) -> float:
+        """Mean true conditional entropy (nats) over predictable positions of `seq`."""
+        hs = []
+        for t in range(self.order, seq.shape[1]):
+            p = self.probs[self._ctx_index(seq, t)]
+            hs.append(-(p * p.clamp_min(1e-12).log()).sum(1))
+        return torch.stack(hs).mean().item()
+
+
+class TextSource:
+    """Character-level LM data from a text file (e.g. tinyshakespeare)."""
+
+    def __init__(self, path: str, seed: int = 0):
+        text = open(path, encoding="utf-8").read()
+        chars = sorted(set(text))
+        self.vocab = len(chars)
+        self.stoi = {c: i for i, c in enumerate(chars)}
+        self.data = torch.tensor([self.stoi[c] for c in text], dtype=torch.long)
+        self._g = torch.Generator().manual_seed(seed)
+
+    def sample(self, batch: int, seq_len: int) -> torch.Tensor:
+        ix = torch.randint(0, len(self.data) - seq_len - 1, (batch,), generator=self._g)
+        return torch.stack([self.data[i : i + seq_len + 1] for i in ix])
