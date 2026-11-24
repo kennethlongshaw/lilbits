@@ -19,6 +19,7 @@ import time
 import torch
 
 from .data import MarkovSource
+from .bitnet import BitLinear
 from .littlebit import LittleBitLinear
 from .model import Config, TinyLM
 from .train import TrainConfig, train
@@ -43,11 +44,11 @@ def _bytes(params) -> int:
 
 
 def size_report(model: TinyLM) -> dict:
-    """Training-time tensors (FP32) and deployed size (FP16 for FP parts, packed bits for LittleBit)."""
+    """Training-time tensors (FP32) and deployed size (FP16 for FP parts, packed bits for LittleBit / BitNet)."""
     lb_params, lb_bits, lb_dense = set(), 0, 0
     fp_lin_params, fp_lin_dense = set(), 0
     for name, m in model.named_modules():
-        if isinstance(m, LittleBitLinear):
+        if isinstance(m, (LittleBitLinear, BitLinear)):
             lb_params |= {id(p) for p in m.parameters()}
             lb_bits += m.storage_bits()
             lb_dense += m.in_features * m.out_features

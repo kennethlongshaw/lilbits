@@ -25,6 +25,59 @@ same number of trainable FP32 parameters as the FP baseline (410,256 vs 412,288)
 LittleBit stores the block weights 11.4× smaller (8.0× for the whole model) and gets within 0.048 of the
 tuned baseline's loss. Tuned settings come from the Optuna sweep below.
 
+### Loss vs stored size: below 1 bpw, and BitNet b1.58 (`uv run lb-frontier`)
+
+![loss vs stored size](results/frontier/loss_vs_size.png)
+
+LittleBit stays at d_model 128 and drops bits per weight. BitNet b1.58 (ternary absmean weights, 8-bit
+absmax activations, `bitnet.BitLinear`) is fixed at 1.58 bpw, so it and FP16 shrink by getting narrower.
+Their widths are picked so stored sizes bracket LittleBit's. Every point is the mean of seeds 0-2 at 1,500 steps.
+
+| model | d_model | block bpw | block linears | whole model | trainable params | eval loss (mean ± sd) |
+|---|---|---|---|---|---|---|
+| FP16 | 24 | 16.00 | 27.0 KiB | 33.2 KiB | 17,016 | 1.149 ± 0.028 |
+| BitNet b1.58 | 64 | 1.59 | 18.8 KiB | 35.5 KiB | 105,792 | 1.132 ± 0.018 |
+| LittleBit (1 path) | 128 | 0.30 | 14.3 KiB | 47.5 KiB | 59,290 | 1.763 ± 0.021 |
+| BitNet b1.58 | 80 | 1.59 | 30.0 KiB | 50.8 KiB | 165,520 | 1.053 ± 0.013 |
+| FP16 | 32 | 16.00 | 49.0 KiB | 57.3 KiB | 29,344 | 1.009 ± 0.022 |
+| LittleBit | 128 | 0.54 | 26.0 KiB | 59.3 KiB | 81,980 | 1.537 ± 0.053 |
+| LittleBit (1 path) | 128 | 0.55 | 26.5 KiB | 59.7 KiB | 155,404 | 1.205 ± 0.033 |
+| BitNet b1.58 | 96 | 1.59 | 42.8 KiB | 67.8 KiB | 233,952 | 1.020 ± 0.019 |
+| LittleBit | 128 | 0.79 | 38.1 KiB | 71.4 KiB | 177,312 | 1.081 ± 0.021 |
+| LittleBit (1 path) | 128 | 0.79 | 38.3 KiB | 71.6 KiB | 248,680 | 1.117 ± 0.018 |
+| FP16 | 40 | 16.00 | 73.8 KiB | 84.1 KiB | 43,080 | 0.988 ± 0.021 |
+| BitNet b1.58 | 112 | 1.59 | 57.9 KiB | 87.0 KiB | 314,160 | 1.004 ± 0.018 |
+| LittleBit | 128 | 1.40 | 67.7 KiB | 101.0 KiB | 410,256 | 1.004 ± 0.018 |
+| BitNet b1.58 | 128 | 1.59 | 76.5 KiB | 109.8 KiB | 412,288 | 0.995 ± 0.021 |
+| FP16 | 48 | 16.00 | 108.0 KiB | 120.5 KiB | 61,680 | 0.975 ± 0.019 |
+
+**On this task, LittleBit loses at matched size.** Only its 1.40 bpw point is competitive:
+1.004 at 101 KiB, against BitNet's 1.004 at 87 KiB and 0.995 at 110 KiB. Below 1 bpw it falls off fast.
+At about 60 KiB, LittleBit at 0.55 bpw scores 1.205, while BitNet d80 at 51 KiB scores 1.053 and FP16 d32 at 57 KiB
+scores 1.009. Narrow FP16 models are on or below the BitNet curve everywhere.
+
+The reasons are specific to this scale, so this result does not contradict the paper's 7B-70B numbers:
+
+- **Scale overhead.** Each LittleBit path stores FP16 scales for every input and output, which costs about
+  16·(in+out)/(in·out) bpw. For 128×128 that is 0.25 bpw per path. At 0.55 bpw with two residual paths,
+  the attention projections are left with rank 1, which is why the two-path curve collapses there.
+  At 4096 width the same overhead is 0.008 bpw.
+- **Rank floor.** At 0.3 bpw (single path) the ranks are 3 for attention and 11 for the MLP. At 4096×4096,
+  0.1 bpw still leaves rank ~190 (one path) or ~95 per path (two).
+- **The task is easy to fit narrow.** A 17k-param FP16 model already reaches 1.15. Size gets bought most
+  cheaply with width, which is BitNet's and FP16's only lever.
+
+Settings:
+
+- LittleBit uses the Optuna winner, which was tuned at 1.41 bpw and reused unchanged at lower bpw.
+  "1 path" means `residual=False`, which gives more rank for the same bits below 1 bpw.
+- FP16 uses its Optuna winner, tuned at d128.
+- BitNet got an 8-run lr/optimizer grid at d96 (`results/frontier/bitnet_grid.jsonl`). The best was DeepSeek
+  Muon at lr 1e-2; 2e-2 was no better.
+- BitNet storage is counted at log2(3) = 1.585 bits plus one FP16 scale per matrix. That is its
+  information floor; practical 5-trits-per-byte packing costs 1.6 bits.
+- BitNet trains with 8-bit activations, while LittleBit and FP16 use full-precision activations.
+
 ### How the LittleBit result improved (seed 0)
 
 | step | change | bpw | eval loss |
@@ -300,10 +353,12 @@ residual paths.
 
 - `src/littlebit_scratch/littlebit.py`: `LittleBitLinear`, STEs, bpw accounting, SVD/ITQ init
 - `src/littlebit_scratch/model.py`: attention, SwiGLU, `TransformerBlock`, `TinyLM`, FP → LittleBit conversion
+- `src/littlebit_scratch/bitnet.py`: BitNet b1.58 `BitLinear` baseline (`--linear bitnet`)
 - `src/littlebit_scratch/data.py`: Markov source with known entropy floor, char-level text source
 - `src/littlebit_scratch/train.py`: Lightning Fabric training loop, `TrainConfig`, `lb-train` CLI (jsonargparse)
 - `src/littlebit_scratch/optim.py`: DeepSeek-V4-style Muon (hybrid Newton-Schulz)
 - `src/littlebit_scratch/tune.py`: `lb-tune`, Optuna sweep over training / optimizer settings
+- `src/littlebit_scratch/frontier.py`: `lb-frontier`, loss vs stored size for LittleBit bpw sweep, BitNet and FP16 widths
 - `src/littlebit_scratch/bench.py`: `lb-bench`, FP vs LittleBit loss/time/params/memory/size comparison
 - `src/littlebit_scratch/infer_bench.py`: `lb-infer-bench`, inference speed vs nn.Linear
 - `src/littlebit_scratch/packed.py`: bit-packed inference export

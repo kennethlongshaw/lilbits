@@ -191,7 +191,7 @@ def run(linear: str = "both", model: Config = Config(), train: TrainConfig = Tra
     """Train an FP baseline and/or a LittleBit model.
 
     Args:
-        linear: fp | littlebit | both
+        linear: fp | littlebit | bitnet (BitNet b1.58 baseline) | both (fp, then littlebit)
         model: model / LittleBit layer config (vocab_size is taken from the data)
         train: optimization and Fabric settings
         text: char-level text file instead of the synthetic Markov source

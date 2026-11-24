@@ -15,6 +15,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from .bitnet import BitLinear
 from .littlebit import LittleBitLinear
 
 
@@ -26,7 +27,7 @@ class Config:
     n_heads: int = 4
     n_layers: int = 2
     mlp_ratio: float = 8 / 3
-    # linear layer choice: "fp" or "littlebit"
+    # linear layer choice: "fp", "littlebit" or "bitnet" (BitNet b1.58 baseline)
     linear: str = "fp"
     bpw: float = 1.0
     residual: bool = True
@@ -54,6 +55,8 @@ def make_linear_factory(cfg: Config) -> LinearFactory:
             init=cfg.init,
             itq_iters=cfg.itq_iters,
         )
+    if cfg.linear == "bitnet":
+        return BitLinear
     raise ValueError(f"unknown linear {cfg.linear!r}")
 
 
@@ -149,7 +152,7 @@ def compression_report(model: nn.Module) -> dict:
     dense = 0
     bits = 0
     for m in model.modules():
-        if isinstance(m, LittleBitLinear):
+        if isinstance(m, (LittleBitLinear, BitLinear)):
             dense += m.in_features * m.out_features
             bits += m.storage_bits()
         elif isinstance(m, nn.Linear) and m is not getattr(model, "head", None):
