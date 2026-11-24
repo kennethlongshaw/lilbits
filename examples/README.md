@@ -11,6 +11,7 @@ Small, runnable scripts showing how the primitives fit together. Run from the re
 | `05_pack_and_helion.py` | train → pack to 1-bit → inference on the torch and Helion backends, with logits and generation agreement |
 | `06_looped_reasoning_lm.py` | recurrent-depth LM (Huginn; Ouro exit gate optional): latent loops instead of thinking tokens, test-time depth scaling, adaptive exit that freezes converged states, loop-vs-token cost (`--core-linear`, `--exit-gate`) |
 | `07_byte_level_patching.py` | tokenizer-free byte models: BLT (entropy patches, hash n-gram embeddings) and H-Net (learned chunks, ratio loss) vs a plain byte transformer: bits/byte, bytes per patch, full cost metrics (`--latent-linear`) |
+| `08_llm_jepa.py` | LLM-JEPA: next-token loss plus a JEPA embedding loss on paired views (Text, Code), [PRED] tokens as the predictor, block-causal packing in one pass, EMA or online target, loss dropout; compares all variants on quality and full train/infer cost (`--linear`, `--k-pred`, `--ema-decay`) |
 
 Every example defaults to a short smoke run that proves the code path works; pass `--steps` to actually train.
 Examples that train print a `METRICS {json}` line with train wall/CPU/peak RSS, inference cost, RAM weights,

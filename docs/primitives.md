@@ -38,6 +38,7 @@ testable on its own and has a dense FP reference.
 | Decision models (Jev-style) | Stateful blocks, state fork per question, typed readout over tied code rows, per-type temperature | ✅ | `models/decision.py`, `examples/04_decision_model.py` |
 | | Proper scoring (log loss, CRPS, Brier), ECE, code-swap flip rate | ✅ | `models/decision.py` |
 | | MoE FFN with FP router, per-question halting | ⬜ | |
+| Training objectives | LLM-JEPA: JEPA embedding loss next to next-token loss, [PRED]-token predictor, block-causal packing, EMA target, loss dropout | ✅ | `models/jepa.py`, `examples/08_llm_jepa.py` |
 | Training | Fabric loop, Muon / DeepSeek Muon, FP warm start → LittleBit conversion, Optuna | ✅ | `train.py`, `training/optim.py`, `training/tune.py` |
 | | Staged curriculum (looped FP → LittleBit → index → MTP → halting) | ⬜ | |
 | Eval | Wall, CPU, peak RSS, RAM, disk for any code block (`Meter`, `size_report`) | ✅ | `measure.py` |

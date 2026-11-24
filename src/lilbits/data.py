@@ -79,3 +79,22 @@ class ByteSource:
     def sample(self, batch: int, seq_len: int) -> torch.Tensor:
         ix = torch.randint(0, len(self.data) - seq_len - 1, (batch,), generator=self._g)
         return torch.stack([self.data[i : i + seq_len + 1] for i in ix])
+
+
+class PairedViewSource:
+    """Two views of the same content, for JEPA-style training: (Text, Code) pairs.
+
+    Text is a random string over `n_symbols` ids [0, n). Code is the same content written another way: the
+    reversed string through a fixed random substitution into ids [n, 2n). Id 2n is free for a [PRED] token,
+    so the vocabulary is 2n + 1. Code is a deterministic function of Text, so the ideal Text -> Code loss is 0.
+    """
+
+    def __init__(self, n_symbols: int = 8, length: int = 8, seed: int = 0):
+        self.n, self.length = n_symbols, length
+        self.vocab, self.pred_token = 2 * n_symbols + 1, 2 * n_symbols
+        self._g = torch.Generator().manual_seed(seed)
+        self.sub = torch.randperm(n_symbols, generator=self._g) + n_symbols
+
+    def sample(self, batch: int) -> tuple[torch.Tensor, torch.Tensor]:
+        text = torch.randint(0, self.n, (batch, self.length), generator=self._g)
+        return text, self.sub[text.flip(1)]

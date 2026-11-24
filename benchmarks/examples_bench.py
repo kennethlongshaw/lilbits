@@ -35,6 +35,7 @@ RUNS = [
     ("06 looped LM, LittleBit core", ["examples/06_looped_reasoning_lm.py", "--core-linear", "littlebit"]),
     ("06 looped LM, Ouro exit gate", ["examples/06_looped_reasoning_lm.py", "--exit-gate"]),
     ("07 byte-level: baseline / BLT / H-Net", ["examples/07_byte_level_patching.py"]),
+    ("08 LLM-JEPA (LM / online / EMA / EMA+dropout)", ["examples/08_llm_jepa.py"]),
 ]
 
 
@@ -80,6 +81,13 @@ def table(rows: list[dict]) -> str:
                 f"train {v['train_wall_s']:.1f}s, infer {v['infer_wall_s'] * 1e3:.0f} ms, "
                 f"{v['stored_bytes'] / 1024:,.0f} KiB"
                 for k, v in m["models"].items()
+            )
+        elif "variants" in m:  # LLM-JEPA variants
+            infer = "; ".join(
+                f"{k}: code loss {v['code_loss']:.3f}, retrieval {v['retrieval_top1']:.2f}, "
+                f"train {v['train_wall_s']:.2f}s, infer {v['infer_wall_s'] * 1e3:.0f} ms, "
+                f"EMA copy {v['train_only_ema_bytes'] / 1024:,.0f} KiB"
+                for k, v in m["variants"].items()
             )
         elif "ms_per_question_batched" in m:
             infer = (

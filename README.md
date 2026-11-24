@@ -8,6 +8,7 @@ The repo collects interchangeable building blocks, each with tests and a dense F
 - **Token mixers:** softmax attention, and recurrent mixers with fixed-size state: Gated DeltaNet, Mamba2, GLA (RWKV-6 style), xLSTM mLSTM and minGRU.
 - **Packing and inference:** 1-bit and 2-bit packed weights, inference caches, and Helion kernels.
 - **Decision-model parts (Jev-style):** a state prefilled once, forks per question, and a typed Choice / Score / Noul readout with calibration metrics.
+- **Model assemblies:** a looped recurrent-depth LM (Huginn / Ouro), byte-level models with dynamic patching (BLT, H-Net), and LLM-JEPA training with an EMA target.
 - **Training:** a Lightning Fabric loop, Muon and DeepSeek-style Muon, FP warm start → LittleBit conversion, and Optuna sweeps.
 - **Measurement:** quality, stored size, RAM, peak memory, CPU time and wall time for both training and inference.
 

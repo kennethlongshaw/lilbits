@@ -105,8 +105,12 @@ class TransformerBlock(nn.Module):
         self.norm2 = nn.RMSNorm(d_model)
         self.mlp = SwiGLU(d_model, mlp_hidden, linear)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x))
+    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
+        if attn_mask is None:
+            x = x + self.attn(self.norm1(x))
+        else:  # custom masks (block-causal packing etc.) need softmax attention
+            assert isinstance(self.attn, Attention), "attn_mask requires mixer='softmax'"
+            x = x + self.attn(self.norm1(x), attn_mask)
         return x + self.mlp(self.norm2(x))
 
 
@@ -129,12 +133,19 @@ class TinyLM(nn.Module):
         nn.init.normal_(self.tok.weight, std=0.02)
         nn.init.normal_(self.pos.weight, std=0.02)
 
-    def forward(self, idx: torch.Tensor) -> torch.Tensor:
-        T = idx.shape[1]
-        x = self.tok(idx) + self.pos(torch.arange(T, device=idx.device))
+    def hidden(
+        self, idx: torch.Tensor, attn_mask: torch.Tensor | None = None, pos: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """Final normed hidden states (B, T, d), before the LM head. pos: optional position ids (T,)."""
+        if pos is None:
+            pos = torch.arange(idx.shape[1], device=idx.device)
+        x = self.tok(idx) + self.pos(pos)
         for b in self.blocks:
-            x = b(x)
-        return self.head(self.norm(x))
+            x = b(x, attn_mask)
+        return self.norm(x)
+
+    def forward(self, idx: torch.Tensor, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
+        return self.head(self.hidden(idx, attn_mask))
 
 
 @torch.no_grad()

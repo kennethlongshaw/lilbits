@@ -24,7 +24,8 @@ class Attention(nn.Module):
         self.v = linear(d_model, d_model)
         self.o = linear(d_model, d_model)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
+        """attn_mask: optional bool (T, T) or (B, 1, T, T), True = may attend. None = plain causal."""
         B, T, C = x.shape
         H = self.n_heads
 
@@ -32,5 +33,9 @@ class Attention(nn.Module):
             return t.view(B, T, H, C // H).transpose(1, 2)
 
         q, k = self.q_norm(heads(self.q(x))), self.k_norm(heads(self.k(x)))
-        y = F.scaled_dot_product_attention(q, k, heads(self.v(x)), is_causal=True)
+        v = heads(self.v(x))
+        if attn_mask is None:
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
         return self.o(y.transpose(1, 2).reshape(B, T, C))
