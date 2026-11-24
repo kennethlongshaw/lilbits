@@ -27,7 +27,7 @@ from lilbits.models.tinylm import Config
 from lilbits.training.train import TrainConfig, train
 
 
-def suggest(trial: optuna.Trial, linear: str) -> tuple[dict, dict]:
+def suggest(trial: optuna.Trial | optuna.trial.FixedTrial, linear: str) -> tuple[dict, dict]:
     """Returns (model overrides, TrainConfig kwargs)."""
     tc = dict(
         lr=trial.suggest_float("lr", 5e-4, 2e-2, log=True),
@@ -68,10 +68,12 @@ def run_trial(params: dict, args, seed: int = 0, trial: optuna.Trial | None = No
 
 def worker(args):
     storage = JournalStorage(JournalFileBackend(args.journal))
-    study = optuna.load_study(study_name=args.study, storage=storage,
-                              sampler=optuna.samplers.TPESampler(seed=args.worker_id, multivariate=True,
-                                                                 group=True, n_startup_trials=8),
-                              pruner=optuna.pruners.MedianPruner(n_startup_trials=8, n_warmup_steps=args.prune_after))
+    study = optuna.load_study(
+        study_name=args.study,
+        storage=storage,
+        sampler=optuna.samplers.TPESampler(seed=args.worker_id, multivariate=True, group=True, n_startup_trials=8),
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=8, n_warmup_steps=args.prune_after),
+    )
     study.optimize(lambda t: run_trial({}, args, trial=t), n_trials=args.trials_per_worker)
 
 
@@ -85,7 +87,9 @@ def main(argv=None):
     ap.add_argument("--prune-after", type=int, default=800, help="no pruning before this step")
     ap.add_argument("--journal", default="results/optuna/journal.log")
     ap.add_argument("--study", default=None)
-    ap.add_argument("--confirm", type=int, default=0, help="re-run the top-3 configs (and the default, trial 0) on this many seeds")
+    ap.add_argument(
+        "--confirm", type=int, default=0, help="re-run the top-3 configs (and the default, trial 0) on this many seeds"
+    )
     ap.add_argument("--worker-id", type=int, default=-1, help=argparse.SUPPRESS)
     ap.add_argument("--trials-per-worker", type=int, default=0, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
@@ -106,9 +110,23 @@ def main(argv=None):
             study.enqueue_trial(default)
         per = -(-args.trials // args.workers)
         base = [a for a in (argv if argv is not None else sys.argv[1:])]
-        procs = [subprocess.Popen([sys.executable, "-m", "lilbits.training.tune", *base, "--study", args.study,
-                                   "--worker-id", str(w), "--trials-per-worker", str(per)])
-                 for w in range(args.workers)]
+        procs = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "lilbits.training.tune",
+                    *base,
+                    "--study",
+                    args.study,
+                    "--worker-id",
+                    str(w),
+                    "--trials-per-worker",
+                    str(per),
+                ]
+            )
+            for w in range(args.workers)
+        ]
         for p in procs:
             p.wait()
         study = optuna.load_study(study_name=args.study, storage=storage)
@@ -122,7 +140,7 @@ def main(argv=None):
         try:
             imp = optuna.importance.get_param_importances(study)
             print("  importance:", {k: round(v, 3) for k, v in imp.items()})
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print("  importance unavailable:", e)
 
     if args.confirm:
@@ -133,7 +151,7 @@ def main(argv=None):
         with ProcessPoolExecutor(args.workers) as ex:
             vals = list(ex.map(_confirm_job, [(p, args, s) for _, p, s in jobs]))
         res = {}
-        for (n, p, s), v in zip(jobs, vals):
+        for (n, p, _s), v in zip(jobs, vals, strict=False):
             res.setdefault(n, {"params": p, "seeds": []})["seeds"].append(v)
         print(f"\nconfirmation on seeds 0..{args.confirm - 1}:")
         for n, r in res.items():

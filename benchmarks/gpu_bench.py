@@ -1,8 +1,8 @@
 """Packed LittleBit inference on GPU: FP16 nn.Linear vs packed (torch backend) vs packed (Helion kernels).
 
     uv sync --extra gpu
-    uv run python benchmarks/gpu_bench.py                                    # first run autotunes (~a few min per shape)
-    LB_HELION_AUTOTUNE=1 uv run python benchmarks/gpu_bench.py               # Helion's full autotuner instead of the candidate list
+    uv run python benchmarks/gpu_bench.py    # first run autotunes (~a few min per shape)
+    LB_HELION_AUTOTUNE=1 uv run python benchmarks/gpu_bench.py  # Helion's full autotuner
 
 CPU smoke test (tiny shapes, correctness only):
     HELION_INTERPRET=1 uv run python benchmarks/gpu_bench.py --device cpu --dims 64x96 --tokens 1,5 --bpws 2.0
@@ -16,8 +16,8 @@ import time
 import torch
 from torch import nn
 
-from lilbits.layers.littlebit import LittleBitLinear
 from lilbits.inference.packed import PackedLittleBitLinear
+from lilbits.layers.littlebit import LittleBitLinear
 
 
 def _time(fn, device, reps):
@@ -48,8 +48,10 @@ def main(argv=None):
         dt = torch.float32
     torch.manual_seed(0)
     print(f"device {dev} ({torch.cuda.get_device_name() if dev == 'cuda' else 'cpu'}), dtype {dt}\n")
-    print("| in x out | tokens | bpw (rank/path) | dense weights | packed weights | dense ms | packed torch ms | "
-          "packed helion ms | helion vs dense | max abs err helion vs torch |")
+    print(
+        "| in x out | tokens | bpw (rank/path) | dense weights | packed weights | dense ms | packed torch ms | "
+        "packed helion ms | helion vs dense | max abs err helion vs torch |"
+    )
     print("|---|---|---|---|---|---|---|---|---|---|")
     for d in args.dims.split(","):
         d_in, d_out = (int(v) for v in d.split("x"))
@@ -72,8 +74,12 @@ def main(argv=None):
                     out = pk(x).float()  # first call compiles / autotunes
                 t_hel = _time(lambda: pk(x), dev, args.reps)
                 err = (out - ref).abs().max().item()
-                print(f"| {d} | {t} | {pk.storage_bytes() * 8 / (d_in * d_out):.2f} ({pk.rank}) | {dense_mib:.1f} MiB | {pk_mib:.2f} MiB | "
-                      f"{t_dense:.3f} | {t_torch:.3f} | {t_hel:.3f} | {t_dense / t_hel:.2f}x | {err:.2e} |", flush=True)
+                print(
+                    f"| {d} | {t} | {pk.storage_bytes() * 8 / (d_in * d_out):.2f} ({pk.rank}) "
+                    f"| {dense_mib:.1f} MiB | {pk_mib:.2f} MiB | "
+                    f"{t_dense:.3f} | {t_torch:.3f} | {t_hel:.3f} | {t_dense / t_hel:.2f}x | {err:.2e} |",
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":

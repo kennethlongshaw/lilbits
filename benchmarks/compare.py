@@ -1,7 +1,7 @@
 """Full comparison of LittleBit, BitNet b1.58 and FP16 at matched stored size: training time, peak memory,
 training state, learning curve, inference speed / memory in fast (cached) and packed form, stored size.
 
-Each model trains (seed 0, tuned settings from python benchmarks/frontier.py) in its own process, single-threaded, so wall
+Each model trains (seed 0, tuned settings from benchmarks/frontier.py) in its own process, single-threaded, so wall
 times and peak RSS are comparable. Eval loss is also reported as the 3-seed mean from results/frontier.
 
     uv run python benchmarks/compare.py                      # writes results/compare/compare.{json,md}
@@ -21,15 +21,15 @@ import sys
 import time
 
 import torch
-
-from lilbits.measure import size_report
-from lilbits.layers.bitnet import BitLinear, pack_bitnet
-from lilbits.data import MarkovSource
 from frontier import best_grid, key, load
 from frontier import main_specs as frontier_specs
-from lilbits.layers.littlebit import LittleBitLinear
-from lilbits.models.tinylm import Config
+
+from lilbits.data import MarkovSource
 from lilbits.inference.packed import model_bytes, pack_model
+from lilbits.layers.bitnet import BitLinear, pack_bitnet
+from lilbits.layers.littlebit import LittleBitLinear
+from lilbits.measure import size_report
+from lilbits.models.tinylm import Config
 from lilbits.training.train import TrainConfig, param_groups, train
 
 TARGET = 1.10  # "steps to reach eval loss <= TARGET" learning-curve stat
@@ -37,8 +37,9 @@ TARGET = 1.10  # "steps to reach eval loss <= TARGET" learning-curve stat
 
 def specs(frontier_dir: str) -> dict[str, dict]:
     all_specs = frontier_specs(best_grid(os.path.join(frontier_dir, "bitnet_grid.jsonl")))
-    pick = lambda fam, d, bpw=None: next(s for s in all_specs if s["family"] == fam and s["d_model"] == d
-                                         and (bpw is None or s.get("bpw") == bpw))
+    pick = lambda fam, d, bpw=None: next(
+        s for s in all_specs if s["family"] == fam and s["d_model"] == d and (bpw is None or s.get("bpw") == bpw)
+    )
     return {
         "FP16 d128 (full size)": dict(pick("FP16", 48), d_model=128),
         "LittleBit 1.40 bpw": pick("LittleBit", 128, 1.41),
@@ -156,19 +157,31 @@ def run_one(spec: dict, steps: int, reps: int) -> dict:
     hit = next((h for h in hist if h["eval"] <= TARGET), None)
     groups = param_groups(model, 1.0, 1.0, 0.0)
     pbytes = sizes["train_param_bytes"]
-    muon_bytes = sum(p.numel() * p.element_size() for g in groups if g["name"] in ("hidden", "latent")
-                     for p in g["params"])
+    muon_bytes = sum(
+        p.numel() * p.element_size() for g in groups if g["name"] in ("hidden", "latent") for p in g["params"]
+    )
     opt_bytes = 2 * pbytes if tc.optim == "adamw" else muon_bytes + 2 * (pbytes - muon_bytes)
     out = {
-        "spec": spec, "final_eval_seed0": res["final_eval"], "final_train_seed0": hist[-1]["train"],
-        "wall_s": wall, "cpu_s": cpu, "ms_per_step": wall / steps * 1e3, "fp_warmup_steps": tc.fp_warmup if cfg.linear == "littlebit" else 0,
-        "tokens": steps * tc.batch * cfg.seq_len, "train_peak_extra_mib": train_peak,
-        "train_state_kib": (2 * pbytes + opt_bytes) / 1024, "optim": tc.optim,
+        "spec": spec,
+        "final_eval_seed0": res["final_eval"],
+        "final_train_seed0": hist[-1]["train"],
+        "wall_s": wall,
+        "cpu_s": cpu,
+        "ms_per_step": wall / steps * 1e3,
+        "fp_warmup_steps": tc.fp_warmup if cfg.linear == "littlebit" else 0,
+        "tokens": steps * tc.batch * cfg.seq_len,
+        "train_peak_extra_mib": train_peak,
+        "train_state_kib": (2 * pbytes + opt_bytes) / 1024,
+        "optim": tc.optim,
         "steps_to_target": hit["step"] if hit else None,
-        "secs_to_target": hit["step"] / steps * wall if hit else None, **sizes,
+        "secs_to_target": hit["step"] / steps * wall if hit else None,
+        **sizes,
     }
-    inputs = {"batch_32x64": eval_batches[0][:, :64], "seq_1x64": eval_batches[0][:1, :64],
-              "1_token": eval_batches[0][:1, :1]}
+    inputs = {
+        "batch_32x64": eval_batches[0][:, :64],
+        "seq_1x64": eval_batches[0][:1, :64],
+        "1_token": eval_batches[0][:1, :1],
+    }
     out["infer_fast"] = _infer(model, inputs, reps)
     if cfg.linear == "littlebit":
         out["infer_packed"] = _infer(pack_model(model), inputs, reps)
@@ -178,11 +191,16 @@ def run_one(spec: dict, steps: int, reps: int) -> dict:
 
 
 def seed_stats(frontier_dir: str, spec: dict) -> tuple[float, float] | None:
-    rows = [r for r in load(os.path.join(frontier_dir, "runs.jsonl"))
-            if key(r["spec"], r["seed"]).replace(f'"seed": {r["seed"]}', "") == key(spec, 0).replace('"seed": 0', "")]
+    rows = [
+        r
+        for r in load(os.path.join(frontier_dir, "runs.jsonl"))
+        if key(r["spec"], r["seed"]).replace(f'"seed": {r["seed"]}', "") == key(spec, 0).replace('"seed": 0', "")
+    ]
     vals = [r["final_eval"] for r in rows]
     if not vals and spec["linear"] == "fp" and spec["d_model"] == 128:  # tuned FP d128: Optuna's 3-seed confirm
-        conf = json.load(open(os.path.join(os.path.dirname(frontier_dir), "optuna", "fp_bpw1.41_steps1500_confirm.json")))
+        conf = json.load(
+            open(os.path.join(os.path.dirname(frontier_dir), "optuna", "fp_bpw1.41_steps1500_confirm.json"))
+        )
         vals = next(r["seeds"] for r in conf.values() if r["params"] == {k: v for k, v in spec["tc"].items()})
     return (statistics.mean(vals), statistics.stdev(vals)) if len(vals) > 1 else None
 
@@ -195,7 +213,10 @@ def table(rows: list[dict]) -> str:
     fmt = lambda v, f: "n/a" if v is None else f(v)
     metrics = [
         ("**Quality**", None),
-        ("Eval loss, mean ± sd of 3 seeds", lambda r: f"{r['seeds'][0]:.3f} ± {r['seeds'][1]:.3f}" if r["seeds"] else "n/a"),
+        (
+            "Eval loss, mean ± sd of 3 seeds",
+            lambda r: f"{r['seeds'][0]:.3f} ± {r['seeds'][1]:.3f}" if r["seeds"] else "n/a",
+        ),
         ("Eval loss, seed 0 (this run)", lambda r: f"{r['final_eval_seed0']:.3f}"),
         ("Final train loss, seed 0", lambda r: f"{r['final_train_seed0']:.3f}"),
         ("**Size**", None),
@@ -203,19 +224,35 @@ def table(rows: list[dict]) -> str:
         ("Trainable params", lambda r: f"{r['trainable_params']:,}"),
         ("Stored block linears", lambda r: kib(r["deployed_block_bytes"] / 1024)),
         ("Stored whole model", lambda r: kib(r["deployed_total_bytes"] / 1024)),
-        ("vs FP16 d128 (whole model)", lambda r: f"{fp['deployed_total_bytes'] / r['deployed_total_bytes']:.1f}x smaller"),
+        (
+            "vs FP16 d128 (whole model)",
+            lambda r: f"{fp['deployed_total_bytes'] / r['deployed_total_bytes']:.1f}x smaller",
+        ),
         ("**Training** (1,500 steps, 3.07M tokens, 1 CPU thread)", None),
-        ("Optimizer", lambda r: r["optim"] + (f", {r['fp_warmup_steps']} FP warm-up steps" if r["fp_warmup_steps"] else "")),
-        ("Wall time / CPU time", lambda r: f"{r['wall_s']:.0f} s / " + (f"{r['cpu_s']:.0f} s" if "cpu_s" in r else "≈ wall (1 thread)")),
+        (
+            "Optimizer",
+            lambda r: r["optim"] + (f", {r['fp_warmup_steps']} FP warm-up steps" if r["fp_warmup_steps"] else ""),
+        ),
+        (
+            "Wall time / CPU time",
+            lambda r: f"{r['wall_s']:.0f} s / " + (f"{r['cpu_s']:.0f} s" if "cpu_s" in r else "≈ wall (1 thread)"),
+        ),
         ("ms per step", lambda r: f"{r['ms_per_step']:.0f}"),
-        (f"Steps / seconds to eval loss ≤ {TARGET}", lambda r: "never" if r["steps_to_target"] is None
-         else f"{r['steps_to_target']} / {r['secs_to_target']:.0f} s"),
+        (
+            f"Steps / seconds to eval loss ≤ {TARGET}",
+            lambda r: (
+                "never" if r["steps_to_target"] is None else f"{r['steps_to_target']} / {r['secs_to_target']:.0f} s"
+            ),
+        ),
         ("Peak RSS growth while training (sampled)", lambda r: f"{r['train_peak_extra_mib']:.0f} MiB"),
         ("Weights + grads + optimizer state", lambda r: kib(r["train_state_kib"])),
         ("**Inference, fast path** (FP32 weights / cached factors)", None),
         ("Weights in RAM", lambda r: kib(r["infer_fast"]["weights_in_ram_kib"])),
         ("state_dict file (training format)", lambda r: kib(r["infer_fast"]["file_kib"])),
-        ("Batch 32×64: ms (tokens/s)", lambda r: f"{r['infer_fast']['batch_32x64_ms']:.1f} ({r['infer_fast']['batch_32x64_tok_per_s']:,.0f})"),
+        (
+            "Batch 32×64: ms (tokens/s)",
+            lambda r: f"{r['infer_fast']['batch_32x64_ms']:.1f} ({r['infer_fast']['batch_32x64_tok_per_s']:,.0f})",
+        ),
         ("1×64 sequence: ms", lambda r: f"{r['infer_fast']['seq_1x64_ms']:.2f}"),
         ("1 token: ms", lambda r: f"{r['infer_fast']['1_token_ms']:.2f}"),
         ("Peak RSS growth, batch 32×64", lambda r: f"{r['infer_fast']['batch_32x64_peak_extra_mib']:.1f} MiB"),
@@ -258,9 +295,22 @@ def main(argv=None):
     todo = [] if args.table_only else (args.only.split(",") if args.only else [n for n in sp if n not in done])
     for name in todo:
         for attempt in range(8):  # torch subprocesses here intermittently die with "oneMKL FATAL" at load
-            p = subprocess.run([sys.executable, __file__, "--one", name, "--steps",
-                                str(args.steps), "--reps", str(args.reps), "--frontier-dir", args.frontier_dir],
-                               stdout=subprocess.PIPE, text=True)
+            p = subprocess.run(
+                [
+                    sys.executable,
+                    __file__,
+                    "--one",
+                    name,
+                    "--steps",
+                    str(args.steps),
+                    "--reps",
+                    str(args.reps),
+                    "--frontier-dir",
+                    args.frontier_dir,
+                ],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
             if p.returncode == 0:
                 break
             time.sleep(10 * (attempt + 1))

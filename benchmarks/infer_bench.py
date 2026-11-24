@@ -1,7 +1,7 @@
 """Inference-speed benchmark: nn.Linear vs LittleBitLinear (cached factors), single layers and TinyLM.
 
-    uv run python benchmarks/infer_bench.py
-    uv run python benchmarks/infer_bench.py --device cuda --dims 4096x4096,4096x11008
+uv run python benchmarks/infer_bench.py
+uv run python benchmarks/infer_bench.py --device cuda --dims 4096x4096,4096x11008
 """
 
 from __future__ import annotations
@@ -38,13 +38,24 @@ def layer_rows(dims, bpws, tokens_list, device, reps):
         for tokens in tokens_list:
             x = torch.randn(tokens, d_in, device=device)
             t_fp = _time(lambda: fp(x), device, reps)
-            for b, lb in lbs.items():
+            for _b, lb in lbs.items():
                 t_lb = _time(lambda: lb(x), device, reps)
+                assert lb._infer_cache is not None
                 kind = lb._infer_cache[0]
-                rows.append(dict(shape=f"{d_in}x{d_out}", tokens=tokens, bpw=lb.bpw, rank=lb.rank, kind=kind,
-                                 fp_ms=t_fp, lb_ms=t_lb, speedup=t_fp / t_lb,
-                                 fp_macs=d_in * d_out, lb_macs=(2 * lb.rank * (d_in + d_out) if kind == "lowrank"
-                                                                else d_in * d_out)))
+                rows.append(
+                    dict(
+                        shape=f"{d_in}x{d_out}",
+                        tokens=tokens,
+                        bpw=lb.bpw,
+                        rank=lb.rank,
+                        kind=kind,
+                        fp_ms=t_fp,
+                        lb_ms=t_lb,
+                        speedup=t_fp / t_lb,
+                        fp_macs=d_in * d_out,
+                        lb_macs=(2 * lb.rank * (d_in + d_out) if kind == "lowrank" else d_in * d_out),
+                    )
+                )
     return rows
 
 
@@ -86,12 +97,18 @@ def main(argv=None):
 
     dims = [tuple(int(v) for v in d.split("x")) for d in args.dims.split(",")]
     print(f"\n## Single layer, {args.device}, {args.threads} threads\n")
-    print("| in x out | tokens | LittleBit bpw (rank/path) | path | MACs vs dense | nn.Linear ms | LittleBit ms | speedup |")
+    print(
+        "| in x out | tokens | LittleBit bpw (rank/path) | path | MACs vs dense "
+        "| nn.Linear ms | LittleBit ms | speedup |"
+    )
     print("|---|---|---|---|---|---|---|---|")
-    for r in layer_rows(dims, [float(b) for b in args.bpws.split(",")],
-                        [int(t) for t in args.tokens.split(",")], args.device, args.reps):
-        print(f"| {r['shape']} | {r['tokens']} | {r['bpw']:.2f} ({r['rank']}) | {r['kind']} | "
-              f"{r['lb_macs'] / r['fp_macs']:.2f}x | {r['fp_ms']:.3f} | {r['lb_ms']:.3f} | {r['speedup']:.2f}x |")
+    for r in layer_rows(
+        dims, [float(b) for b in args.bpws.split(",")], [int(t) for t in args.tokens.split(",")], args.device, args.reps
+    ):
+        print(
+            f"| {r['shape']} | {r['tokens']} | {r['bpw']:.2f} ({r['rank']}) | {r['kind']} | "
+            f"{r['lb_macs'] / r['fp_macs']:.2f}x | {r['fp_ms']:.3f} | {r['lb_ms']:.3f} | {r['speedup']:.2f}x |"
+        )
 
 
 if __name__ == "__main__":

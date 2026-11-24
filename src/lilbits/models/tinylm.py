@@ -7,19 +7,18 @@ LM head stay full precision.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 from lilbits.layers.bitnet import BitLinear
-from lilbits.layers.littlebit import LittleBitLinear
-from lilbits.mixers.recurrent import MIXERS, GatedDeltaNet
 from lilbits.layers.ffn import SwiGLU
+from lilbits.layers.littlebit import LittleBitLinear
 from lilbits.mixers.attention import Attention
+from lilbits.mixers.recurrent import MIXERS, GatedDeltaNet
 
 
 @dataclass
@@ -68,8 +67,15 @@ def make_linear_factory(cfg: Config) -> LinearFactory:
     raise ValueError(f"unknown linear {cfg.linear!r}")
 
 
-def make_mixer(d_model: int, n_heads: int, linear: LinearFactory, mixer: str = "softmax", qk_norm: bool = False,
-               conv_size: int = 4, lb_gates: bool = False) -> nn.Module:
+def make_mixer(
+    d_model: int,
+    n_heads: int,
+    linear: LinearFactory,
+    mixer: str = "softmax",
+    qk_norm: bool = False,
+    conv_size: int = 4,
+    lb_gates: bool = False,
+) -> nn.Module:
     if mixer == "softmax":
         return Attention(d_model, n_heads, linear, qk_norm)
     if mixer == "gdn":
@@ -77,13 +83,22 @@ def make_mixer(d_model: int, n_heads: int, linear: LinearFactory, mixer: str = "
     if mixer == "gla":
         return MIXERS[mixer](d_model, n_heads, linear, lb_gates=lb_gates)
     if mixer in MIXERS:
-        return MIXERS[mixer](d_model, n_heads, linear, conv_size=conv_size, lb_gates=lb_gates)
+        return MIXERS[mixer](d_model, n_heads, linear, conv_size=conv_size, lb_gates=lb_gates)  # ty: ignore[unknown-argument]
     raise ValueError(f"unknown mixer {mixer!r}")
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, mlp_hidden: int, linear: LinearFactory, qk_norm: bool = False,
-                 mixer: str = "softmax", conv_size: int = 4, lb_gates: bool = False):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        mlp_hidden: int,
+        linear: LinearFactory,
+        qk_norm: bool = False,
+        mixer: str = "softmax",
+        conv_size: int = 4,
+        lb_gates: bool = False,
+    ):
         super().__init__()
         self.norm1 = nn.RMSNorm(d_model)
         self.attn = make_mixer(d_model, n_heads, linear, mixer, qk_norm, conv_size, lb_gates)
@@ -100,12 +115,13 @@ class TinyLM(nn.Module):
         super().__init__()
         self.cfg = cfg
         linear = make_linear_factory(cfg)
-        hidden = int(round(cfg.d_model * cfg.mlp_ratio / 8)) * 8
+        hidden = round(cfg.d_model * cfg.mlp_ratio / 8) * 8
         self.tok = nn.Embedding(cfg.vocab_size, cfg.d_model)
         self.pos = nn.Embedding(cfg.seq_len, cfg.d_model)
         self.blocks = nn.ModuleList(
-            TransformerBlock(cfg.d_model, cfg.n_heads, hidden, linear, cfg.qk_norm, cfg.mixer, cfg.conv_size,
-                             cfg.lb_gates)
+            TransformerBlock(
+                cfg.d_model, cfg.n_heads, hidden, linear, cfg.qk_norm, cfg.mixer, cfg.conv_size, cfg.lb_gates
+            )
             for _ in range(cfg.n_layers)
         )
         self.norm = nn.RMSNorm(cfg.d_model)

@@ -19,7 +19,9 @@ STABLE = (2.0, -1.5, 0.5)
 
 
 @torch.no_grad()
-def hybrid_newton_schulz(G: torch.Tensor, fast_steps: int = 8, stable_steps: int = 2, eps: float = 1e-7) -> torch.Tensor:
+def hybrid_newton_schulz(
+    G: torch.Tensor, fast_steps: int = 8, stable_steps: int = 2, eps: float = 1e-7
+) -> torch.Tensor:
     """Approximate the orthogonal polar factor U V^T of G (2D)."""
     dtype = torch.bfloat16 if G.is_cuda else torch.float32
     X = G.to(dtype)
@@ -38,10 +40,26 @@ def hybrid_newton_schulz(G: torch.Tensor, fast_steps: int = 8, stable_steps: int
 
 
 class DeepSeekMuon(torch.optim.Optimizer):
-    def __init__(self, params, lr: float = 1e-3, momentum: float = 0.95, weight_decay: float = 0.0,
-                 update_rms: float = 0.18, nesterov: bool = True, fast_steps: int = 8, stable_steps: int = 2):
-        defaults = dict(lr=lr, momentum=momentum, weight_decay=weight_decay, update_rms=update_rms,
-                        nesterov=nesterov, fast_steps=fast_steps, stable_steps=stable_steps)
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-3,
+        momentum: float = 0.95,
+        weight_decay: float = 0.0,
+        update_rms: float = 0.18,
+        nesterov: bool = True,
+        fast_steps: int = 8,
+        stable_steps: int = 2,
+    ):
+        defaults = dict(
+            lr=lr,
+            momentum=momentum,
+            weight_decay=weight_decay,
+            update_rms=update_rms,
+            nesterov=nesterov,
+            fast_steps=fast_steps,
+            stable_steps=stable_steps,
+        )
         super().__init__(params, defaults)
         for g in self.param_groups:
             for p in g["params"]:

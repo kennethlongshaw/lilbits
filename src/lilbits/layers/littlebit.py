@@ -26,6 +26,7 @@ are set so the layer starts with roughly unit-variance-preserving outputs.
 from __future__ import annotations
 
 import math
+from typing import cast
 
 import torch
 import torch.nn.functional as F
@@ -49,7 +50,7 @@ class SmoothSign(torch.autograd.Function):
         return _sign(x)
 
     @staticmethod
-    def backward(ctx, grad_out: torch.Tensor):
+    def backward(ctx, grad_out: torch.Tensor):  # ty: ignore[incompatible-method-override]
         (x,) = ctx.saved_tensors
         t = torch.tanh(ctx.k * x)
         return grad_out * ctx.k * (1.0 - t * t), None
@@ -64,7 +65,7 @@ class ClippedSTE(torch.autograd.Function):
         return _sign(x)
 
     @staticmethod
-    def backward(ctx, grad_out: torch.Tensor):
+    def backward(ctx, grad_out: torch.Tensor):  # ty: ignore[incompatible-method-override]
         (x,) = ctx.saved_tensors
         return grad_out * (x.abs() <= 1).to(grad_out.dtype)
 
@@ -133,8 +134,16 @@ def _rank1_nonneg(M: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 class _Path(nn.Module):
-    def __init__(self, in_features: int, out_features: int, rank: int, gain: float, latent_std: float,
-                 init: str = "small", bimodal_center: float = 0.5):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        rank: int,
+        gain: float,
+        latent_std: float,
+        init: str = "small",
+        bimodal_center: float = 0.5,
+    ):
         super().__init__()
         if init == "bimodal":
             self.U = nn.Parameter(_bimodal((out_features, rank), bimodal_center, latent_std))
@@ -212,10 +221,20 @@ class LittleBitLinear(nn.Module):
         if latent_std is None:
             latent_std = 1.0 / smooth_k if ste == "smooth" else 0.1
         path_gain = gain / math.sqrt(paths)
-        self.paths = nn.ModuleList(
-            _Path(in_features, out_features, rank, path_gain, latent_std,
-                  init="bimodal" if init == "bimodal" else "small")
-            for _ in range(paths)
+        # registered as an nn.ModuleList; typed as a list of paths for checkers
+        self.paths = cast(
+            "list[_Path]",
+            nn.ModuleList(
+                _Path(
+                    in_features,
+                    out_features,
+                    rank,
+                    path_gain,
+                    latent_std,
+                    init="bimodal" if init == "bimodal" else "small",
+                )
+                for _ in range(paths)
+            ),
         )
         self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
         if init == "svd":
@@ -292,7 +311,7 @@ class LittleBitLinear(nn.Module):
     @torch.no_grad()
     def weight(self) -> torch.Tensor:
         """Materialize the dense effective weight (for inspection/tests only)."""
-        return sum(p.weight() for p in self.paths)
+        return torch.stack([p.weight() for p in self.paths]).sum(0)
 
     @property
     def bpw(self) -> float:

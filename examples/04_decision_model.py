@@ -39,16 +39,25 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from lilbits.models.decision import StatefulBlock, TypedReadout, brier, clone_states, crps, ece, fork_states, ordinal_stats
 from lilbits.measure import Meter, size_report, state_dict_bytes
+from lilbits.models.decision import (
+    StatefulBlock,
+    TypedReadout,
+    brier,
+    clone_states,
+    crps,
+    ece,
+    fork_states,
+    ordinal_stats,
+)
 from lilbits.models.tinylm import Config, make_linear_factory
 from lilbits.training.train import TrainConfig, make_optimizers
 
 # ---- vocabulary -------------------------------------------------------------------------------
 N_KEYS = N_VALS = 16
-KEY, VAL = 0, 16                 # KEY+i, VAL+i
-CODE, N_CODES = 32, 8            # option codes [A]..[H]
-DIGIT = 40                       # 0..9 for Score
+KEY, VAL = 0, 16  # KEY+i, VAL+i
+CODE, N_CODES = 32, 8  # option codes [A]..[H]
+DIGIT = 40  # 0..9 for Score
 YES, NO = 50, 51
 STATE, Q, CHOICE, SCORE, NOUL, ANS = 52, 53, 54, 55, 56, 57
 VOCAB = 58
@@ -69,19 +78,30 @@ def make_batch(B: int, g: torch.Generator) -> dict:
     kx = torch.randint(0, N_KEYS, (B,), generator=g)
     true_v = vals[rows, kx]
     cand = torch.stack([torch.randperm(N_VALS - 1, generator=g)[: K_OPTIONS - 1] for _ in range(B)])
-    cand = cand + (cand >= true_v[:, None]).long()                       # distractors != true value
+    cand = cand + (cand >= true_v[:, None]).long()  # distractors != true value
     opt_vals = torch.cat([true_v[:, None], cand], 1)
     perm = torch.argsort(torch.rand(B, K_OPTIONS, generator=g), 1)
     opt_vals = opt_vals.gather(1, perm)
     codes = torch.stack([torch.randperm(N_CODES, generator=g)[:K_OPTIONS] for _ in range(B)])
-    choice = torch.cat([torch.full((B, 1), Q), torch.full((B, 1), CHOICE), (KEY + kx)[:, None],
-                        torch.stack([CODE + codes, VAL + opt_vals], 2).flatten(1), torch.full((B, 1), ANS)], 1)
-    choice_allowed = CODE + codes                                         # readout rows for this question
+    choice = torch.cat(
+        [
+            torch.full((B, 1), Q),
+            torch.full((B, 1), CHOICE),
+            (KEY + kx)[:, None],
+            torch.stack([CODE + codes, VAL + opt_vals], 2).flatten(1),
+            torch.full((B, 1), ANS),
+        ],
+        1,
+    )
+    choice_allowed = CODE + codes  # readout rows for this question
     choice_target = (opt_vals == true_v[:, None]).float().argmax(1)
 
     # Score: "how many keys have value v?" (0..9)
-    v = torch.where(torch.rand(B, generator=g) < 0.7, vals[rows, torch.randint(0, N_KEYS, (B,), generator=g)],
-                    torch.randint(0, N_VALS, (B,), generator=g))
+    v = torch.where(
+        torch.rand(B, generator=g) < 0.7,
+        vals[rows, torch.randint(0, N_KEYS, (B,), generator=g)],
+        torch.randint(0, N_VALS, (B,), generator=g),
+    )
     score = torch.stack([torch.full((B,), Q), torch.full((B,), SCORE), VAL + v, torch.full((B,), ANS)], 1)
     score_target = (vals == v[:, None]).sum(1).clamp(max=9)
 
@@ -91,20 +111,29 @@ def make_batch(B: int, g: torch.Generator) -> dict:
     nv = torch.where(yes, true_v, other)
     noul = torch.stack([torch.full((B,), Q), torch.full((B,), NOUL), KEY + kx, VAL + nv, torch.full((B,), ANS)], 1)
 
-    return {"state": state,
-            "choice": (choice, choice_allowed, choice_target, opt_vals),
-            "score": (score, (DIGIT + torch.arange(10)).expand(B, 10), score_target),
-            "noul": (noul, torch.tensor([NO, YES]).expand(B, 2), yes.long())}
+    return {
+        "state": state,
+        "choice": (choice, choice_allowed, choice_target, opt_vals),
+        "score": (score, (DIGIT + torch.arange(10)).expand(B, 10), score_target),
+        "noul": (noul, torch.tensor([NO, YES]).expand(B, 2), yes.long()),
+    }
 
 
 # ---- model ------------------------------------------------------------------------------------
 class DecisionModel(nn.Module):
-    def __init__(self, d: int = 96, heads: int = 4, loops: int = 2, linear: str = "littlebit", bpw: float = 1.0,
-                 mixer: str = "gdn"):
+    def __init__(
+        self,
+        d: int = 96,
+        heads: int = 4,
+        loops: int = 2,
+        linear: str = "littlebit",
+        bpw: float = 1.0,
+        mixer: str = "gdn",
+    ):
         super().__init__()
         lb = make_linear_factory(Config(linear=linear, bpw=bpw, init="svd", itq_iters=20))
         fp = make_linear_factory(Config(linear="fp"))
-        self.embed = nn.Embedding(VOCAB, d)            # tied with the answer-code readout rows
+        self.embed = nn.Embedding(VOCAB, d)  # tied with the answer-code readout rows
         nn.init.normal_(self.embed.weight, std=0.02)
         self.prelude = StatefulBlock(d, heads, lb, mixer)
         self.core = StatefulBlock(d, heads, lb, mixer)  # one set of weights, applied `loops` times
@@ -119,11 +148,11 @@ class DecisionModel(nn.Module):
         x = self.embed(tokens)
         x, s0 = self.prelude(x, states[0])
         new = [s0]
-        for i in range(self.loops):                    # each loop pass keeps its own GDN state
+        for i in range(self.loops):  # each loop pass keeps its own GDN state
             x, si = self.core(x, states[1 + i])
             new.append(si)
         x, sc = self.coda(x, states[-1])
-        return self.norm(x), new + [sc]
+        return self.norm(x), [*new, sc]
 
     def prefill(self, state_tokens):
         return self(state_tokens)[1]
@@ -135,13 +164,13 @@ class DecisionModel(nn.Module):
 
 
 def loss_fn(model, batch) -> tuple[torch.Tensor, dict]:
-    states = model.prefill(batch["state"])             # state written once, shared by all questions
-    total, parts = 0.0, {}
+    states = model.prefill(batch["state"])  # state written once, shared by all questions
+    total, parts = torch.zeros(()), {}
     for kind in TYPES:
         suffix, allowed, target = batch[kind][:3]
         logp = model.answer_logp(states, suffix, allowed, kind)
         nll = F.nll_loss(logp, target)
-        if kind == "score":                            # proper scoring for ordinal: add CRPS
+        if kind == "score":  # proper scoring for ordinal: add CRPS
             nll = nll + crps(logp.exp(), target).mean()
         parts[kind] = nll.item()
         total = total + nll
@@ -162,7 +191,7 @@ def evaluate(model, batch) -> dict:
         out[kind] = {"acc": correct.float().mean().item(), "ece": ece(conf, correct), "brier": brier(p, target).item()}
         if kind == "score":
             out[kind]["mae_E[x]"] = (ordinal_stats(p) - target).abs().mean().item()
-        if kind == "choice":                           # code-swap / order invariance
+        if kind == "choice":  # code-swap / order invariance
             opt_vals = batch["choice"][3]
             chosen = opt_vals.gather(1, pred[:, None]).squeeze(1)
             B = suffix.shape[0]
@@ -170,7 +199,7 @@ def evaluate(model, batch) -> dict:
             codes = torch.stack([torch.randperm(N_CODES)[:K_OPTIONS] for _ in range(B)])
             v2 = opt_vals.gather(1, perm)
             s2 = suffix.clone()
-            s2[:, 3:3 + 2 * K_OPTIONS] = torch.stack([CODE + codes, VAL + v2], 2).flatten(1)
+            s2[:, 3 : 3 + 2 * K_OPTIONS] = torch.stack([CODE + codes, VAL + v2], 2).flatten(1)
             p2 = model.answer_logp(states, s2, CODE + codes, kind).exp()
             chosen2 = v2.gather(1, p2.argmax(-1)[:, None]).squeeze(1)
             out[kind]["flip_rate"] = (chosen != chosen2).float().mean().item()
@@ -214,38 +243,58 @@ def main():
     model = DecisionModel(args.d, 4, args.loops, args.linear, args.bpw, args.mixer)
     tc = TrainConfig(lr=3e-3, latent_lr_mult=0.1)
     opts = make_optimizers(model, tc)
-    sched = [torch.optim.lr_scheduler.OneCycleLR(o, max_lr=[pg["lr"] for pg in o.param_groups],
-                                                 total_steps=args.steps, pct_start=0.1) for o in opts]
+    sched = [
+        torch.optim.lr_scheduler.OneCycleLR(
+            o, max_lr=[pg["lr"] for pg in o.param_groups], total_steps=args.steps, pct_start=0.1
+        )
+        for o in opts
+    ]
     test = make_batch(256, torch.Generator().manual_seed(123))
     t0 = time.time()
     train_meter = Meter().__enter__()
     for step in range(args.steps):
-        loss, parts = loss_fn(model, make_batch(args.batch, g))
+        loss, _parts = loss_fn(model, make_batch(args.batch, g))
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        for o, s in zip(opts, sched):
+        for o, s in zip(opts, sched, strict=False):
             o.step()
             o.zero_grad(set_to_none=True)
             s.step()
         if step % max(1, args.steps // 4) == 0 or step == args.steps - 1:
             ev = evaluate(model, test)
-            print(f"step {step:5d}  loss {loss.item():.3f}  " + "  ".join(
-                f"{k} acc {v['acc']:.2f}" for k, v in ev.items()) + f"  {time.time() - t0:.0f}s", flush=True)
+            print(
+                f"step {step:5d}  loss {loss.item():.3f}  "
+                + "  ".join(f"{k} acc {v['acc']:.2f}" for k, v in ev.items())
+                + f"  {time.time() - t0:.0f}s",
+                flush=True,
+            )
     train_meter.__exit__()
     ev = evaluate(model, test)
-    print(f"\n{args.linear} prelude+core ({args.bpw:g} bpw if littlebit), {args.loops} loops, "
-          f"{sum(p.numel() for p in model.parameters()):,} params")
+    print(
+        f"\n{args.linear} prelude+core ({args.bpw:g} bpw if littlebit), {args.loops} loops, "
+        f"{sum(p.numel() for p in model.parameters()):,} params"
+    )
     for kind, m in ev.items():
         print(f"  {kind:6s} " + "  ".join(f"{k} {v:.3f}" for k, v in m.items()))
-    print("  temps  " + "  ".join(f"{k} {t:.2f}" for k, t in zip(TYPES, model.readout.log_temp.exp().tolist())))
+    print(
+        "  temps  "
+        + "  ".join(f"{k} {t:.2f}" for k, t in zip(TYPES, model.readout.log_temp.exp().tolist(), strict=False))
+    )
     with Meter() as infer_meter:
         t = timing(model, test)
     print("  " + "  ".join(f"{k} {v:.2f}" for k, v in t.items()))
     sizes = size_report(model)
-    metrics = {"train_steps": args.steps, **train_meter.as_dict("train_"), **infer_meter.as_dict("infer_"), **t,
-               "params": sizes["trainable_params"], "stored_bytes": sizes["deployed_total_bytes"],
-               "ram_weights_bytes": sum(t.numel() * t.element_size() for t in model.state_dict().values()),
-               "checkpoint_bytes": state_dict_bytes(model), "choice_acc": ev["choice"]["acc"]}
+    metrics = {
+        "train_steps": args.steps,
+        **train_meter.as_dict("train_"),
+        **infer_meter.as_dict("infer_"),
+        **t,
+        "params": sizes["trainable_params"],
+        "stored_bytes": sizes["deployed_total_bytes"],
+        "ram_weights_bytes": sum(t.numel() * t.element_size() for t in model.state_dict().values()),
+        "checkpoint_bytes": state_dict_bytes(model),
+        "choice_acc": ev["choice"]["acc"],
+    }
     print("METRICS " + json.dumps(metrics))
 
 

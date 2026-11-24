@@ -1,3 +1,5 @@
+from typing import Any
+
 import torch
 
 from lilbits.data import MarkovSource
@@ -26,10 +28,12 @@ def test_joint_itq_moves_latents_away_from_zero():
     R = joint_itq(Up, Vp, iters=50)
     ZR = Z @ R
     assert zero_margin(ZR) < zero_margin(Z)
+
     # closer to the binary hypercube: sign(ZR) explains more of ZR
     def fit(X):
         Xs = X / X.norm()
         return (X.sign() * Xs).sum() / X.sign().norm()
+
     assert fit(ZR) > fit(Z)
 
 
@@ -64,7 +68,7 @@ def test_bimodal_init_has_no_latents_near_zero():
 
 def test_convert_fp_to_littlebit_keeps_fp_parts():
     torch.manual_seed(0)
-    base = dict(vocab_size=16, seq_len=16, d_model=64, n_heads=2, n_layers=1)
+    base: dict[str, Any] = dict(vocab_size=16, seq_len=16, d_model=64, n_heads=2, n_layers=1)
     fp = TinyLM(Config(**base, linear="fp"))
     lb = convert_fp_to_littlebit(fp, Config(**base, linear="littlebit", bpw=4.0, itq_iters=10))
     torch.testing.assert_close(lb.tok.weight, fp.tok.weight)
@@ -74,9 +78,20 @@ def test_convert_fp_to_littlebit_keeps_fp_parts():
 
 def test_train_with_fp_warmup_records_phases():
     src = MarkovSource(vocab=8, order=1, branching=2, seed=0)
-    cfg = Config(vocab_size=8, seq_len=16, d_model=32, n_heads=2, n_layers=1, linear="littlebit",
-                 bpw=2.0, residual=False, itq_iters=10)
-    res = train(cfg, TrainConfig(steps=20, batch=8, lr=3e-3, log_every=5, fp_warmup=10, verbose=False, accelerator="cpu"), src)
+    cfg = Config(
+        vocab_size=8,
+        seq_len=16,
+        d_model=32,
+        n_heads=2,
+        n_layers=1,
+        linear="littlebit",
+        bpw=2.0,
+        residual=False,
+        itq_iters=10,
+    )
+    res = train(
+        cfg, TrainConfig(steps=20, batch=8, lr=3e-3, log_every=5, fp_warmup=10, verbose=False, accelerator="cpu"), src
+    )
     phases = [h["phase"] for h in res["history"]]
     assert phases[0] == "fp-warm" and "converted" in phases and phases[-1] == "littlebit"
     assert res["history"][-1]["step"] == 19

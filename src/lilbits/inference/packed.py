@@ -20,7 +20,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from lilbits.layers.littlebit import LittleBitLinear, _sign
+from lilbits.layers.littlebit import LittleBitLinear
 
 _SHIFTS = torch.arange(8, dtype=torch.uint8)
 
@@ -59,6 +59,12 @@ class PackedLittleBitLinear(nn.Module):
     see helion_kernels.py; CUDA, or CPU with HELION_INTERPRET=1 for correctness checks)."""
 
     backend: str = "torch"
+    U_bits: torch.Tensor
+    V_bits: torch.Tensor
+    h: torch.Tensor
+    g: torch.Tensor
+    l: torch.Tensor
+    bias: torch.Tensor | None
 
     def __init__(self, layer: LittleBitLinear, chunk: int = 128, backend: str = "torch"):
         super().__init__()
@@ -81,7 +87,13 @@ class PackedLittleBitLinear(nn.Module):
         self = cls.__new__(cls)
         nn.Module.__init__(self)
         self.backend = "torch"
-        self.in_features, self.out_features, self.rank, self.paths, self.chunk = in_features, out_features, rank, paths, chunk
+        self.in_features, self.out_features, self.rank, self.paths, self.chunk = (
+            in_features,
+            out_features,
+            rank,
+            paths,
+            chunk,
+        )
         nb = (rank + 7) // 8
         self.register_buffer("U_bits", torch.zeros(paths, out_features, nb, dtype=torch.uint8))
         self.register_buffer("V_bits", torch.zeros(paths, in_features, nb, dtype=torch.uint8))
@@ -96,12 +108,14 @@ class PackedLittleBitLinear(nn.Module):
         key = (i, self.l.device)
         if key not in cache:
             from lilbits.inference.helion_kernels import l_planes
+
             cache[key] = l_planes(self.l[i], nb)
         return cache[key]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.backend == "helion":
             from lilbits.inference.helion_kernels import packed_forward
+
             return packed_forward(self, x)
         # Scales are folded into each small unpacked chunk (never into activations), and the
         # output accumulates in place, so the only activation-sized tensor is y itself.
@@ -115,9 +129,9 @@ class PackedLittleBitLinear(nn.Module):
             for b0 in range(0, self.U_bits.shape[2], cb):
                 r0 = b0 * 8
                 r = min(self.chunk, self.rank - r0)
-                Sv = unpack_signs(self.V_bits[i, :, b0:b0 + cb], r, dt)  # in x r
-                Sv = Sv * g[:, None] * self.l[i, r0:r0 + r].to(dt)[None, :]
-                Su = unpack_signs(self.U_bits[i, :, b0:b0 + cb], r, dt) * h[:, None]  # out x r
+                Sv = unpack_signs(self.V_bits[i, :, b0 : b0 + cb], r, dt)  # in x r
+                Sv = Sv * g[:, None] * self.l[i, r0 : r0 + r].to(dt)[None, :]
+                Su = unpack_signs(self.U_bits[i, :, b0 : b0 + cb], r, dt) * h[:, None]  # out x r
                 y.addmm_(x2 @ Sv, Su.t())
         if self.bias is not None:
             y += self.bias.to(dt)
@@ -127,8 +141,10 @@ class PackedLittleBitLinear(nn.Module):
         return sum(b.numel() * b.element_size() for b in self.buffers())
 
     def extra_repr(self) -> str:
-        return (f"in={self.in_features}, out={self.out_features}, rank={self.rank}, paths={self.paths}, "
-                f"packed={self.storage_bytes() / 1024:.1f} KiB")
+        return (
+            f"in={self.in_features}, out={self.out_features}, rank={self.rank}, paths={self.paths}, "
+            f"packed={self.storage_bytes() / 1024:.1f} KiB"
+        )
 
 
 @torch.no_grad()

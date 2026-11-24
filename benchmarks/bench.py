@@ -15,23 +15,33 @@ import resource
 import subprocess
 import sys
 import time
+from typing import Any
 
 import torch
 
 from lilbits.data import MarkovSource
-from lilbits.layers.bitnet import BitLinear
-from lilbits.layers.littlebit import LittleBitLinear
 from lilbits.measure import size_report
-from lilbits.models.tinylm import Config, TinyLM
+from lilbits.models.tinylm import Config
 from lilbits.training.train import TrainConfig, train
 
-CONFIGS = {
-    "fp": dict(linear="fp", optim="adamw", fp_warmup=0, init="small", itq_iters=0,
-               label="FP16 baseline"),
-    "lb_scratch": dict(linear="littlebit", optim="adamw", fp_warmup=0, init="svd", itq_iters=50,
-                       label="LittleBit ~{bpw} bpw, SVD+ITQ init (pure from scratch)"),
-    "lb_warm": dict(linear="littlebit", optim="adamw", fp_warmup=300, init="small", itq_iters=50,
-                    label="LittleBit ~{bpw} bpw, 300-step FP warm start + SVD+ITQ"),
+CONFIGS: dict[str, dict[str, Any]] = {
+    "fp": dict(linear="fp", optim="adamw", fp_warmup=0, init="small", itq_iters=0, label="FP16 baseline"),
+    "lb_scratch": dict(
+        linear="littlebit",
+        optim="adamw",
+        fp_warmup=0,
+        init="svd",
+        itq_iters=50,
+        label="LittleBit ~{bpw} bpw, SVD+ITQ init (pure from scratch)",
+    ),
+    "lb_warm": dict(
+        linear="littlebit",
+        optim="adamw",
+        fp_warmup=300,
+        init="small",
+        itq_iters=50,
+        label="LittleBit ~{bpw} bpw, 300-step FP warm start + SVD+ITQ",
+    ),
 }
 
 
@@ -44,7 +54,7 @@ def _bytes(params) -> int:
     return sum(p.numel() * p.element_size() for p in params)
 
 
-OPTIMS = {
+OPTIMS: dict[str, dict[str, Any]] = {
     "adamw": dict(optim="adamw", ns=5, label="AdamW"),
     "muon": dict(optim="muon", ns=5, label="torch Muon 5 NS"),
     "muon10": dict(optim="muon", ns=10, label="torch Muon 10 NS"),
@@ -61,27 +71,49 @@ def run_one(spec: str, args) -> dict:
     eval_batches = [source.sample(args.batch, args.seq_len) for _ in range(4)]
     floor = sum(source.entropy_floor(b) for b in eval_batches) / len(eval_batches)
     rss0 = _rss_mib()
-    cfg = Config(vocab_size=args.vocab, seq_len=args.seq_len, d_model=args.d_model, n_heads=args.n_heads,
-                 n_layers=args.n_layers, linear=c["linear"], bpw=args.bpw, init=c["init"], itq_iters=c["itq_iters"])
+    cfg = Config(
+        vocab_size=args.vocab,
+        seq_len=args.seq_len,
+        d_model=args.d_model,
+        n_heads=args.n_heads,
+        n_layers=args.n_layers,
+        linear=c["linear"],
+        bpw=args.bpw,
+        init=c["init"],
+        itq_iters=c["itq_iters"],
+    )
     if args.device.startswith("cuda"):
         torch.cuda.reset_peak_memory_stats()
     t0 = time.perf_counter()
-    tc = TrainConfig(steps=args.steps, batch=args.batch, lr=args.lr, log_every=args.steps,
-                     weight_decay=args.weight_decay, latent_lr_mult=0.1, seed=args.seed, verbose=False,
-                     fp_warmup=c["fp_warmup"], optim=o["optim"], muon_ns_steps=o["ns"],
-                     accelerator="cuda" if args.device.startswith("cuda") else "cpu")
+    tc = TrainConfig(
+        steps=args.steps,
+        batch=args.batch,
+        lr=args.lr,
+        log_every=args.steps,
+        weight_decay=args.weight_decay,
+        latent_lr_mult=0.1,
+        seed=args.seed,
+        verbose=False,
+        fp_warmup=c["fp_warmup"],
+        optim=o["optim"],
+        muon_ns_steps=o["ns"],
+        accelerator="cuda" if args.device.startswith("cuda") else "cpu",
+    )
     res = train(cfg, tc, source, eval_batches)
     wall = time.perf_counter() - t0
-    train_peak = (torch.cuda.max_memory_allocated() / 2**20 if args.device.startswith("cuda")
-                  else _rss_mib() - rss0)
+    train_peak = torch.cuda.max_memory_allocated() / 2**20 if args.device.startswith("cuda") else _rss_mib() - rss0
     model = res["model"].eval()
     sizes = size_report(model)
     # AdamW keeps exp_avg + exp_avg_sq (2x params); Muon keeps one momentum buffer for its 2D block matrices
     from lilbits.training.train import param_groups
+
     groups = param_groups(model, 1.0, 1.0, 0.0)
     muon_bytes = sum(_bytes(g["params"]) for g in groups if g["name"] in ("hidden", "latent"))
-    opt_state_bytes = (2 * sizes["train_param_bytes"] if o["optim"] == "adamw"
-                       else muon_bytes + 2 * (sizes["train_param_bytes"] - muon_bytes))
+    opt_state_bytes = (
+        2 * sizes["train_param_bytes"]
+        if o["optim"] == "adamw"
+        else muon_bytes + 2 * (sizes["train_param_bytes"] - muon_bytes)
+    )
     xb = eval_batches[0][:, :-1].to(args.device)
     with torch.no_grad():
         for _ in range(3):
@@ -93,12 +125,20 @@ def run_one(spec: str, args) -> dict:
             torch.cuda.synchronize()
         infer_ms = (time.perf_counter() - t) / 20 * 1e3
     return {
-        "key": key, "optim": okey or "adamw",
-        "label": c["label"].format(bpw=f"{args.bpw:g}") + ("" if not okey else f" [{o['label']}]"), "final_eval": res["final_eval"], "entropy_floor": floor,
-        "steps": args.steps, "tokens": args.steps * args.batch * args.seq_len,
-        "fp_warmup_steps": c["fp_warmup"], "wall_s": wall, "ms_per_step": wall / args.steps * 1e3,
-        "train_peak_mib": train_peak, "train_state_bytes": 2 * sizes["train_param_bytes"] + opt_state_bytes,
-        "infer_ms_per_batch": infer_ms, **sizes,
+        "key": key,
+        "optim": okey or "adamw",
+        "label": c["label"].format(bpw=f"{args.bpw:g}") + ("" if not okey else f" [{o['label']}]"),
+        "final_eval": res["final_eval"],
+        "entropy_floor": floor,
+        "steps": args.steps,
+        "tokens": args.steps * args.batch * args.seq_len,
+        "fp_warmup_steps": c["fp_warmup"],
+        "wall_s": wall,
+        "ms_per_step": wall / args.steps * 1e3,
+        "train_peak_mib": train_peak,
+        "train_state_bytes": 2 * sizes["train_param_bytes"] + opt_state_bytes,
+        "infer_ms_per_batch": infer_ms,
+        **sizes,
     }
 
 
@@ -106,20 +146,30 @@ def table(rows: list[dict]) -> str:
     kib = lambda b: f"{b / 1024:,.1f} KiB"
     mib = lambda b: f"{b / 2**20:,.2f} MiB"
     fp = next((r for r in rows if r["key"] == "fp"), rows[0])
-    cols = [("", lambda r: r["label"])]
+    [("", lambda r: r["label"])]
     lines = []
     metrics = [
         ("Final eval loss (floor {:.3f})".format(rows[0]["entropy_floor"]), lambda r: f"{r['final_eval']:.3f}"),
-        ("Training steps / tokens seen", lambda r: f"{r['steps']:,} / {r['tokens'] / 1e6:.2f}M"
-         + (f" ({r['fp_warmup_steps']} FP)" if r["fp_warmup_steps"] else "")),
+        (
+            "Training steps / tokens seen",
+            lambda r: (
+                f"{r['steps']:,} / {r['tokens'] / 1e6:.2f}M"
+                + (f" ({r['fp_warmup_steps']} FP)" if r["fp_warmup_steps"] else "")
+            ),
+        ),
         ("Wall time (ms/step)", lambda r: f"{r['wall_s']:.0f} s ({r['ms_per_step']:.0f})"),
         ("Trainable params (FP32 while training)", lambda r: f"{r['trainable_params']:,}"),
         ("Train state: weights+grads+optimizer", lambda r: mib(r["train_state_bytes"])),
         ("Train peak memory (RSS delta / CUDA peak)", lambda r: f"{r['train_peak_mib']:.0f} MiB"),
         ("Deployed block linears", lambda r: f"{kib(r['deployed_block_bytes'])} ({r['block_bpw']:.2f} bpw)"),
         ("Deployed whole model", lambda r: kib(r["deployed_total_bytes"])),
-        ("Compression vs FP16 (blocks / whole)", lambda r: f"{fp['deployed_block_bytes'] / r['deployed_block_bytes']:.1f}x"
-         f" / {fp['deployed_total_bytes'] / r['deployed_total_bytes']:.1f}x"),
+        (
+            "Compression vs FP16 (blocks / whole)",
+            lambda r: (
+                f"{fp['deployed_block_bytes'] / r['deployed_block_bytes']:.1f}x"
+                f" / {fp['deployed_total_bytes'] / r['deployed_total_bytes']:.1f}x"
+            ),
+        ),
         ("Inference ms per batch (unpacked)", lambda r: f"{r['infer_ms_per_batch']:.1f}"),
     ]
     lines.append("| metric | " + " | ".join(r["label"] for r in rows) + " |")
@@ -131,8 +181,9 @@ def table(rows: list[dict]) -> str:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--configs", default=",".join(CONFIGS),
-                    help="comma list of config[:optim], optim in " + ",".join(OPTIMS))
+    ap.add_argument(
+        "--configs", default=",".join(CONFIGS), help="comma list of config[:optim], optim in " + ",".join(OPTIMS)
+    )
     ap.add_argument("--one", help=argparse.SUPPRESS)
     ap.add_argument("--steps", type=int, default=1500)
     ap.add_argument("--batch", type=int, default=32)

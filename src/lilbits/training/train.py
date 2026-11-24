@@ -16,6 +16,7 @@ import json
 import math
 import time
 from dataclasses import asdict, dataclass, replace
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -49,8 +50,9 @@ class TrainConfig:
     verbose: bool = True
 
 
-def param_groups(model: torch.nn.Module, lr: float, scale_lr_mult: float, weight_decay: float,
-                 latent_lr_mult: float = 1.0):
+def param_groups(
+    model: torch.nn.Module, lr: float, scale_lr_mult: float, weight_decay: float, latent_lr_mult: float = 1.0
+):
     """Labeled groups. Latent factors / FP weights get weight decay; LittleBit scales and norms don't.
 
     "hidden" = 2D weights inside the blocks (FP linears), "latent" = LittleBit U/V (also 2D),
@@ -90,8 +92,13 @@ def make_optimizers(model, tc: TrainConfig) -> list[torch.optim.Optimizer]:
     muon_groups = [dict(g, lr=g["lr"] * tc.muon_lr_mult) for g in groups if g["name"] in muon_names]
     adam_groups = [g for g in groups if g["name"] not in muon_names]
     if tc.optim == "muon":
-        muon = torch.optim.Muon(muon_groups, lr=tc.lr, weight_decay=tc.weight_decay,
-                                adjust_lr_fn="match_rms_adamw", ns_steps=tc.muon_ns_steps)
+        muon = torch.optim.Muon(
+            muon_groups,
+            lr=tc.lr,
+            weight_decay=tc.weight_decay,
+            adjust_lr_fn="match_rms_adamw",
+            ns_steps=tc.muon_ns_steps,
+        )
     elif tc.optim == "muon_ds":
         muon = DeepSeekMuon(muon_groups, lr=tc.lr, weight_decay=tc.weight_decay)
     else:
@@ -122,8 +129,20 @@ def latent_stats(model, prev: dict) -> tuple[float, float, dict]:
     return flips / max(1, total), near_zero, cur
 
 
-def _fit(fabric: Fabric, model, label: str, tc: TrainConfig, source, seq_len: int, steps: int, offset: int,
-         eval_batches, history: list, t0: float, on_eval=None):
+def _fit(
+    fabric: Fabric,
+    model,
+    label: str,
+    tc: TrainConfig,
+    source,
+    seq_len: int,
+    steps: int,
+    offset: int,
+    eval_batches,
+    history: list,
+    t0: float,
+    on_eval=None,
+):
     opts = make_optimizers(model, tc)
     model, *opts = fabric.setup(model, *opts)
 
@@ -139,35 +158,44 @@ def _fit(fabric: Fabric, model, label: str, tc: TrainConfig, source, seq_len: in
         loss = lm_loss(model, fabric.to_device(source.sample(tc.batch, seq_len)))
         fabric.backward(loss)
         fabric.clip_gradients(model, opts[0], max_norm=1.0)
-        for o, s in zip(opts, scheds):
+        for o, s in zip(opts, scheds, strict=False):
             o.step()
             o.zero_grad(set_to_none=True)
             s.step()
         if step % tc.log_every == 0 or step == tc.steps - 1 or i == steps - 1:
             ev = evaluate(model, eval_batches)
             flip, nz, signs = latent_stats(model, signs)
-            history.append({"step": step, "phase": label, "train": loss.item(), "eval": ev, "flip": flip,
-                            "near_zero": nz})
+            history.append(
+                {"step": step, "phase": label, "train": loss.item(), "eval": ev, "flip": flip, "near_zero": nz}
+            )
             fabric.log_dict({"train_loss": loss.item(), "eval_loss": ev, "sign_flips": flip}, step=step)
             if on_eval is not None:
                 on_eval(step, ev)  # e.g. Optuna pruning; may raise
             if tc.verbose:
-                fabric.print(f"[{label:9s}] step {step:5d}  train {loss.item():.4f}  eval {ev:.4f}  "
-                             f"sign-flips {flip:.4%}  near-zero {nz:.2%}  {time.time() - t0:.0f}s")
+                fabric.print(
+                    f"[{label:9s}] step {step:5d}  train {loss.item():.4f}  eval {ev:.4f}  "
+                    f"sign-flips {flip:.4%}  near-zero {nz:.2%}  {time.time() - t0:.0f}s"
+                )
     return model.module
 
 
-def train(cfg: Config, tc: TrainConfig, source, eval_batches=None, fabric: Fabric | None = None,
-          on_eval=None) -> dict:
+def train(cfg: Config, tc: TrainConfig, source, eval_batches=None, fabric: Fabric | None = None, on_eval=None) -> dict:
     """Train from scratch. With tc.fp_warmup > 0 (LittleBit only), the first fp_warmup steps train a
     full-precision copy, which is then SVD(+ITQ)-converted, as the paper does with a pretrained model."""
-    fabric = fabric or Fabric(accelerator=tc.accelerator, devices=tc.devices, precision=tc.precision)
+    fabric = fabric or Fabric(accelerator=tc.accelerator, devices=tc.devices, precision=tc.precision)  # ty: ignore[invalid-argument-type]
     fabric.seed_everything(tc.seed, verbose=False)
     eval_batches = eval_batches or [source.sample(tc.batch, cfg.seq_len) for _ in range(4)]
     eval_batches = [fabric.to_device(b) for b in eval_batches]
     history: list = []
-    run = dict(tc=tc, source=source, seq_len=cfg.seq_len, eval_batches=eval_batches, history=history, t0=time.time(),
-               on_eval=on_eval)
+    run: dict[str, Any] = dict(
+        tc=tc,
+        source=source,
+        seq_len=cfg.seq_len,
+        eval_batches=eval_batches,
+        history=history,
+        t0=time.time(),
+        on_eval=on_eval,
+    )
     offset = tc.fp_warmup if (tc.fp_warmup > 0 and cfg.linear == "littlebit") else 0
     if offset:
         with fabric.init_module():
@@ -177,18 +205,29 @@ def train(cfg: Config, tc: TrainConfig, source, eval_batches=None, fabric: Fabri
         ev, (_, nz, _) = evaluate(model, eval_batches), latent_stats(model, {})
         history.append({"step": offset, "phase": "converted", "eval": ev, "near_zero": nz})
         if tc.verbose:
-            fabric.print(f"[converted] eval right after SVD{'+ITQ' if cfg.itq_iters else ''} conversion: "
-                         f"{ev:.4f}  near-zero {nz:.2%}")
+            fabric.print(
+                f"[converted] eval right after SVD{'+ITQ' if cfg.itq_iters else ''} conversion: "
+                f"{ev:.4f}  near-zero {nz:.2%}"
+            )
     else:
         with fabric.init_module():
             model = TinyLM(cfg)
     model = _fit(fabric, model, cfg.linear, steps=tc.steps - offset, offset=offset, **run)
-    return {"model": model, "history": history, "final_eval": history[-1]["eval"],
-            "compression": compression_report(model)}
+    return {
+        "model": model,
+        "history": history,
+        "final_eval": history[-1]["eval"],
+        "compression": compression_report(model),
+    }
 
 
-def run(linear: str = "both", model: Config = Config(), train: TrainConfig = TrainConfig(),
-        text: str | None = None, out: str | None = None) -> dict:
+def run(
+    linear: str = "both",
+    model: Config = Config(),
+    train: TrainConfig = TrainConfig(),
+    text: str | None = None,
+    out: str | None = None,
+) -> dict:
     """Train an FP baseline and/or a LittleBit model.
 
     Args:
@@ -202,18 +241,28 @@ def run(linear: str = "both", model: Config = Config(), train: TrainConfig = Tra
     source = TextSource(text, tc.seed) if text else MarkovSource(vocab=model.vocab_size, seed=tc.seed)
     model = replace(model, vocab_size=source.vocab)
     eval_batches = [source.sample(tc.batch, model.seq_len) for _ in range(4)]
-    floor = None if text else sum(source.entropy_floor(b) for b in eval_batches) / len(eval_batches)
+    floor = (
+        None
+        if isinstance(source, TextSource)
+        else sum(source.entropy_floor(b) for b in eval_batches) / len(eval_batches)
+    )
     if floor is not None:
         print(f"Markov source: uniform loss {math.log(source.vocab):.4f}, entropy floor ~{floor:.4f} nats")
     summary = {"model": asdict(model), "train": asdict(tc), "entropy_floor": floor, "runs": {}}
-    for mode in (["fp", "littlebit"] if linear == "both" else [linear]):
+    for mode in ["fp", "littlebit"] if linear == "both" else [linear]:
         cfg = replace(model, linear=mode)
         res = fit(cfg, tc, source, eval_batches)
         comp = res["compression"]
-        print(f"[{mode}] final eval {res['final_eval']:.4f} | block linears: {comp['block_linear_weights']:,} "
-              f"weights at {comp['bpw']:.3f} bpw ({comp['bits'] / 8 / 1024:.1f} KiB)")
-        summary["runs"][mode] = {"config": asdict(cfg), "final_eval": res["final_eval"], "compression": comp,
-                                 "history": res["history"]}
+        print(
+            f"[{mode}] final eval {res['final_eval']:.4f} | block linears: {comp['block_linear_weights']:,} "
+            f"weights at {comp['bpw']:.3f} bpw ({comp['bits'] / 8 / 1024:.1f} KiB)"
+        )
+        summary["runs"][mode] = {
+            "config": asdict(cfg),
+            "final_eval": res["final_eval"],
+            "compression": comp,
+            "history": res["history"],
+        }
     if out:
         with open(out, "w") as f:
             json.dump(summary, f, indent=2)

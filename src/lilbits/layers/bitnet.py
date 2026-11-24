@@ -34,8 +34,9 @@ def act_quant(x: torch.Tensor, bits: int = 8, eps: float = 1e-5) -> torch.Tensor
 
 
 class BitLinear(nn.Linear):
-    def __init__(self, in_features: int, out_features: int, bias: bool = False, act_bits: int | None = 8,
-                 norm: bool = True):
+    def __init__(
+        self, in_features: int, out_features: int, bias: bool = False, act_bits: int | None = 8, norm: bool = True
+    ):
         super().__init__(in_features, out_features, bias=bias)
         self.act_bits = act_bits
         self.norm = norm
@@ -52,8 +53,8 @@ class BitLinear(nn.Linear):
             x = x + (act_quant(x, self.act_bits) - x).detach()
         return x
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self._quant_input(x)
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        x = self._quant_input(input)
         if not self.training and not torch.is_grad_enabled():  # inference: ternarize once, reuse
             if self._infer_w is None:
                 self._infer_w = ternary(self.weight).detach()
@@ -74,6 +75,10 @@ class PackedBitLinear(nn.Module):
     2 bits/weight is the simple runtime layout (bitnet.cpp's I2_S uses the same); the 1.585-bit figure
     above is the storage floor.
     """
+
+    codes: torch.Tensor
+    scale: torch.Tensor
+    lut: torch.Tensor
 
     def __init__(self, layer: BitLinear):
         super().__init__()

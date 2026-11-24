@@ -1,4 +1,5 @@
 import math
+from typing import Any
 
 import pytest
 import torch
@@ -10,7 +11,7 @@ from lilbits.mixers.recurrent import GatedDeltaNet, gated_delta_rule
 from lilbits.models.tinylm import Config, TinyLM, TransformerBlock, convert_fp_to_littlebit, make_linear_factory
 from lilbits.training.train import TrainConfig, make_optimizers, train
 
-TINY = dict(vocab_size=16, seq_len=16, d_model=32, n_heads=2, n_layers=1, mixer="gdn")
+TINY: dict[str, Any] = dict(vocab_size=16, seq_len=16, d_model=32, n_heads=2, n_layers=1, mixer="gdn")
 
 
 @pytest.mark.parametrize("linear", ["fp", "littlebit"])
@@ -69,26 +70,43 @@ def test_gdn_fp_to_littlebit_conversion_keeps_fp_parts():
     torch.manual_seed(0)
     fp = TinyLM(Config(**TINY, linear="fp"))
     lb = convert_fp_to_littlebit(fp, Config(**TINY, linear="littlebit", bpw=8.0, itq_iters=10))
-    for name in ["blocks.0.attn.A_log", "blocks.0.attn.dt_bias", "blocks.0.attn.a.weight",
-                 "blocks.0.attn.conv_q.conv.weight", "blocks.0.attn.o_norm.weight"]:
+    for name in [
+        "blocks.0.attn.A_log",
+        "blocks.0.attn.dt_bias",
+        "blocks.0.attn.a.weight",
+        "blocks.0.attn.conv_q.conv.weight",
+        "blocks.0.attn.o_norm.weight",
+    ]:
         torch.testing.assert_close(lb.state_dict()[name], fp.state_dict()[name])
     x = torch.randint(0, 16, (2, 16))
     assert torch.isfinite(lb(x)).all()
 
 
 def test_muon_gets_only_2d_matrices_with_gdn():
-    model = TinyLM(Config(**dict(TINY, d_model=64), linear="littlebit", bpw=4.0))
+    kw: dict[str, Any] = {**TINY, "d_model": 64}
+    model = TinyLM(Config(**kw, linear="littlebit", bpw=4.0))
     muon, adam = make_optimizers(model, TrainConfig(lr=1e-3, optim="muon"))
     assert all(p.dim() == 2 for g in muon.param_groups for p in g["params"])
-    conv = model.blocks[0].attn.conv_q.conv.weight
+    block: Any = model.blocks[0]
+    conv = block.attn.conv_q.conv.weight
     assert any(p is conv for g in adam.param_groups for p in g["params"])
 
 
 @pytest.mark.parametrize("linear", ["fp", "littlebit"])
 def test_gdn_training_from_scratch_learns(linear):
     src = MarkovSource(vocab=8, order=1, branching=2, seed=0)
-    cfg = Config(vocab_size=8, seq_len=16, d_model=32, n_heads=2, n_layers=1, linear=linear, mixer="gdn",
-                 bpw=2.0, residual=False, ste="clipped")
+    cfg = Config(
+        vocab_size=8,
+        seq_len=16,
+        d_model=32,
+        n_heads=2,
+        n_layers=1,
+        linear=linear,
+        mixer="gdn",
+        bpw=2.0,
+        residual=False,
+        ste="clipped",
+    )
     res = train(cfg, TrainConfig(steps=300, batch=32, lr=3e-3, log_every=100, verbose=False, accelerator="cpu"), src)
     hist = res["history"]
     assert hist[-1]["eval"] < hist[0]["eval"] - 0.3

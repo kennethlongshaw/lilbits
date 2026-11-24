@@ -21,8 +21,8 @@ computes the same thing with chunked Triton kernels on GPU.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from functools import partial
-from typing import Callable
 
 import torch
 import torch.nn.functional as F
@@ -63,8 +63,7 @@ def gated_delta_rule(q, k, v, g, beta, initial_state=None):
 
 
 class GatedDeltaNet(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, linear: LinearFactory, conv_size: int = 4,
-                 lb_gates: bool = False):
+    def __init__(self, d_model: int, n_heads: int, linear: LinearFactory, conv_size: int = 4, lb_gates: bool = False):
         super().__init__()
         assert d_model % n_heads == 0
         self.n_heads, self.head_dim = n_heads, d_model // n_heads
@@ -137,8 +136,15 @@ class Mamba2(nn.Module):
     Written through `gated_linear_rule` with q = C, k = B, v = dt * x (the SSD / linear-attention duality).
     """
 
-    def __init__(self, d_model: int, n_heads: int, linear: LinearFactory, d_state: int = 32, conv_size: int = 4,
-                 lb_gates: bool = False):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        linear: LinearFactory,
+        d_state: int = 32,
+        conv_size: int = 4,
+        lb_gates: bool = False,
+    ):
         super().__init__()
         assert d_model % n_heads == 0
         self.n_heads, self.head_dim, self.d_state = n_heads, d_model // n_heads, d_state
@@ -240,6 +246,7 @@ class MLSTM(nn.Module):
         small = linear if lb_gates else partial(nn.Linear, bias=True)
         self.i_gate, self.f_gate = small(d_model, n_heads), small(d_model, n_heads)
         if not lb_gates:
+            assert isinstance(self.f_gate, nn.Linear) and isinstance(self.i_gate, nn.Linear)
             nn.init.constant_(self.f_gate.bias, 3.0)  # start remembering (f ~ 0.95), as in xLSTM
             nn.init.constant_(self.i_gate.bias, -3.0)
         self.conv = ShortConv(d_model, conv_size)

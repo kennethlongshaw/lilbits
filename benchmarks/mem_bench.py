@@ -19,9 +19,9 @@ import time
 import torch
 from torch import nn
 
+from lilbits.inference.packed import model_bytes, pack_model
 from lilbits.layers.littlebit import LittleBitLinear
 from lilbits.models.tinylm import Config, TinyLM
-from lilbits.inference.packed import model_bytes, pack_model
 
 
 def _trim():
@@ -64,14 +64,18 @@ def build(case: str):
     else:
         d_in, d_out = (int(v) for v in kind.split("-")[1].split("x"))
         variant = kind.split("-")[2]
-        m = (nn.Linear(d_in, d_out, bias=False) if variant == "fp"
-             else LittleBitLinear(d_in, d_out, bpw=float(arg), residual=True))
+        m = (
+            nn.Linear(d_in, d_out, bias=False)
+            if variant == "fp"
+            else LittleBitLinear(d_in, d_out, bpw=float(arg), residual=True)
+        )
         inputs = {"1 token": torch.randn(1, d_in), "2048 tokens": torch.randn(2048, d_in)}
     m.eval()
     if variant == "packed":
         pack_model(m) if not isinstance(m, LittleBitLinear) else None
         if isinstance(m, LittleBitLinear):
             from lilbits.inference.packed import PackedLittleBitLinear
+
             m = PackedLittleBitLinear(m)
     elif variant == "cached":
         with torch.no_grad():
@@ -80,8 +84,11 @@ def build(case: str):
 
 
 def cache_bytes(m) -> int:
-    return sum(sum(t.numel() * t.element_size() for t in mm._infer_cache[1:])
-               for mm in m.modules() if isinstance(mm, LittleBitLinear) and mm._infer_cache is not None)
+    return sum(
+        sum(t.numel() * t.element_size() for t in mm._infer_cache[1:])
+        for mm in m.modules()
+        if isinstance(mm, LittleBitLinear) and mm._infer_cache is not None
+    )
 
 
 def run_case(case: str, reps: int) -> dict:
@@ -110,9 +117,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--one", help=argparse.SUPPRESS)
     ap.add_argument("--reps", type=int, default=10)
-    ap.add_argument("--cases", default="model-fp,model-cached:1.41,model-packed:1.41,"
-                    "layer-4096x4096-fp,layer-4096x4096-cached:1.0,layer-4096x4096-packed:1.0,"
-                    "layer-4096x4096-packed:0.55,layer-4096x4096-packed:0.1")
+    ap.add_argument(
+        "--cases",
+        default="model-fp,model-cached:1.41,model-packed:1.41,"
+        "layer-4096x4096-fp,layer-4096x4096-cached:1.0,layer-4096x4096-packed:1.0,"
+        "layer-4096x4096-packed:0.55,layer-4096x4096-packed:0.1",
+    )
     ap.add_argument("--out")
     args = ap.parse_args(argv)
     if args.one:
@@ -120,8 +130,12 @@ def main(argv=None):
         return
     rows = []
     for c in args.cases.split(","):
-        o = subprocess.run([sys.executable, __file__, "--one", c, "--reps", str(args.reps)],
-                           stdout=subprocess.PIPE, text=True, check=True).stdout
+        o = subprocess.run(
+            [sys.executable, __file__, "--one", c, "--reps", str(args.reps)],
+            stdout=subprocess.PIPE,
+            text=True,
+            check=True,
+        ).stdout
         rows.append(json.loads(o.strip().splitlines()[-1]))
         print(json.dumps(rows[-1]), flush=True)
     if args.out:

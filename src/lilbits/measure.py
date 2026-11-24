@@ -79,8 +79,12 @@ class Meter:
         self.peak_extra_mib = max(self._peak, _rss_mib()) - self._base
 
     def as_dict(self, prefix: str = "") -> dict:
-        return {f"{prefix}wall_s": self.wall_s, f"{prefix}cpu_s": self.cpu_s, f"{prefix}cpu_util": self.cpu_util,
-                f"{prefix}peak_extra_mib": self.peak_extra_mib}
+        return {
+            f"{prefix}wall_s": self.wall_s,
+            f"{prefix}cpu_s": self.cpu_s,
+            f"{prefix}cpu_util": self.cpu_util,
+            f"{prefix}peak_extra_mib": self.peak_extra_mib,
+        }
 
 
 def tensor_bytes(tensors) -> int:

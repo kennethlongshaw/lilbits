@@ -12,12 +12,15 @@
 
 from __future__ import annotations
 
+import itertools
+from typing import Any
+
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from lilbits.mixers.recurrent import MIXERS
 from lilbits.layers.ffn import SwiGLU
+from lilbits.mixers.recurrent import MIXERS
 
 
 class StatefulBlock(nn.Module):
@@ -26,7 +29,7 @@ class StatefulBlock(nn.Module):
     def __init__(self, d_model: int, n_heads: int, linear, mixer: str = "gdn", mlp_linear=None):
         super().__init__()
         self.n1, self.n2 = nn.RMSNorm(d_model), nn.RMSNorm(d_model)
-        kw = {"conv_size": 1} if mixer in ("gdn", "mamba2", "mlstm", "mingru") else {}
+        kw: dict[str, Any] = {"conv_size": 1} if mixer in ("gdn", "mamba2", "mlstm", "mingru") else {}
         self.mixer = MIXERS[mixer](d_model, n_heads, linear, **kw)
         self.mlp = SwiGLU(d_model, int(d_model * 8 / 3) // 8 * 8, mlp_linear or linear)
 
@@ -83,7 +86,7 @@ def ece(conf: torch.Tensor, correct: torch.Tensor, bins: int = 15) -> float:
     """Expected calibration error over equal-width confidence bins."""
     edges = torch.linspace(0, 1, bins + 1)
     err = 0.0
-    for lo, hi in zip(edges[:-1], edges[1:]):
+    for lo, hi in itertools.pairwise(edges):
         m = (conf > lo) & (conf <= hi)
         if m.any():
             err += m.float().mean() * (conf[m].mean() - correct[m].float().mean()).abs()

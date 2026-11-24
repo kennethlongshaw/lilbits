@@ -21,17 +21,30 @@ from concurrent.futures import ProcessPoolExecutor
 
 import torch
 
-from lilbits.measure import size_report
 from lilbits.data import MarkovSource
+from lilbits.measure import size_report
 from lilbits.models.tinylm import Config
 from lilbits.training.train import TrainConfig, train
 
 # Optuna winners from results/optuna (tuned at d_model 128, LittleBit at 1.41 bpw)
-LB_TUNED = dict(lr=0.017513239557445673, weight_decay=0.01, warmup=100, optim="muon_ds",
-                muon_lr_mult=0.4280616809539174, latent_lr_mult=0.018332324963029632,
-                scale_lr_mult=0.5002803233519172, fp_warmup=600)
-FP_TUNED = dict(lr=0.0037861878865426053, weight_decay=0.0, warmup=150, optim="muon",
-                muon_lr_mult=1.8571470500322553, muon_ns_steps=10)
+LB_TUNED = dict(
+    lr=0.017513239557445673,
+    weight_decay=0.01,
+    warmup=100,
+    optim="muon_ds",
+    muon_lr_mult=0.4280616809539174,
+    latent_lr_mult=0.018332324963029632,
+    scale_lr_mult=0.5002803233519172,
+    fp_warmup=600,
+)
+FP_TUNED = dict(
+    lr=0.0037861878865426053,
+    weight_decay=0.0,
+    warmup=150,
+    optim="muon",
+    muon_lr_mult=1.8571470500322553,
+    muon_ns_steps=10,
+)
 
 BITNET_GRID = [
     dict(optim="adamw", lr=3e-3, warmup=100),
@@ -47,8 +60,16 @@ GRID_D = 96
 
 
 def main_specs(bitnet_tc: dict) -> list[dict]:
-    lb = lambda bpw, res: dict(family="LittleBit" + ("" if res else " (1 path)"), linear="littlebit", d_model=128,
-                               bpw=bpw, residual=res, itq_iters=50, init="small", tc=LB_TUNED)
+    lb = lambda bpw, res: dict(
+        family="LittleBit" + ("" if res else " (1 path)"),
+        linear="littlebit",
+        d_model=128,
+        bpw=bpw,
+        residual=res,
+        itq_iters=50,
+        init="small",
+        tc=LB_TUNED,
+    )
     specs = [lb(1.41, True), lb(0.8, True), lb(0.55, True), lb(0.8, False), lb(0.55, False), lb(0.3, False)]
     specs += [dict(family="BitNet b1.58", linear="bitnet", d_model=d, tc=bitnet_tc) for d in (64, 80, 96, 112, 128)]
     specs += [dict(family="FP16", linear="fp", d_model=d, tc=FP_TUNED) for d in (24, 32, 40, 48)]
@@ -69,8 +90,14 @@ def run_one(job) -> dict:
     tc = TrainConfig(steps=steps, log_every=100, seed=seed, verbose=False, accelerator="cpu", **spec["tc"])
     res = train(cfg, tc, src, eval_batches)
     sizes = size_report(res["model"])
-    return {"key": key(spec, seed), "family": spec["family"], "spec": spec, "seed": seed,
-            "final_eval": res["final_eval"], **sizes}
+    return {
+        "key": key(spec, seed),
+        "family": spec["family"],
+        "spec": spec,
+        "seed": seed,
+        "final_eval": res["final_eval"],
+        **sizes,
+    }
 
 
 def run_jobs(jobs, out: str, workers: int):
@@ -84,8 +111,11 @@ def run_jobs(jobs, out: str, workers: int):
         for r in ex.map(run_one, todo):
             with open(out, "a") as f:
                 f.write(json.dumps(r) + "\n")
-            print(f"{r['family']:20s} d={r['spec']['d_model']:3d} bpw={r['block_bpw']:.3f} "
-                  f"{r['deployed_total_bytes'] / 1024:6.1f} KiB  seed {r['seed']}  eval {r['final_eval']:.4f}", flush=True)
+            print(
+                f"{r['family']:20s} d={r['spec']['d_model']:3d} bpw={r['block_bpw']:.3f} "
+                f"{r['deployed_total_bytes'] / 1024:6.1f} KiB  seed {r['seed']}  eval {r['final_eval']:.4f}",
+                flush=True,
+            )
 
 
 def load(path: str) -> list[dict]:
@@ -106,10 +136,19 @@ def aggregate(rows: list[dict]) -> list[dict]:
     agg = []
     for rs in groups.values():
         losses = [r["final_eval"] for r in rs]
-        agg.append({"family": rs[0]["family"], "d_model": rs[0]["spec"]["d_model"], "block_bpw": rs[0]["block_bpw"],
-                    "total_kib": rs[0]["deployed_total_bytes"] / 1024, "block_kib": rs[0]["deployed_block_bytes"] / 1024,
-                    "params": rs[0]["trainable_params"], "mean": statistics.mean(losses),
-                    "std": statistics.stdev(losses) if len(losses) > 1 else 0.0, "seeds": losses})
+        agg.append(
+            {
+                "family": rs[0]["family"],
+                "d_model": rs[0]["spec"]["d_model"],
+                "block_bpw": rs[0]["block_bpw"],
+                "total_kib": rs[0]["deployed_total_bytes"] / 1024,
+                "block_kib": rs[0]["deployed_block_bytes"] / 1024,
+                "params": rs[0]["trainable_params"],
+                "mean": statistics.mean(losses),
+                "std": statistics.stdev(losses) if len(losses) > 1 else 0.0,
+                "seeds": losses,
+            }
+        )
     return sorted(agg, key=lambda a: (a["family"], a["total_kib"]))
 
 
@@ -119,21 +158,37 @@ def plot(agg: list[dict], png: str):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    style = {"LittleBit": ("#2a6fdb", "o"), "LittleBit (1 path)": ("#7aa7f0", "s"),
-             "BitNet b1.58": ("#d9622b", "^"), "FP16": ("#6b6b6b", "D")}
+    style = {
+        "LittleBit": ("#2a6fdb", "o"),
+        "LittleBit (1 path)": ("#7aa7f0", "s"),
+        "BitNet b1.58": ("#d9622b", "^"),
+        "FP16": ("#6b6b6b", "D"),
+    }
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2), sharey=True)
-    for ax, xkey, xlabel in ((axes[0], "total_kib", "stored size, whole model (KiB)"),
-                             (axes[1], "block_kib", "stored size, block linears only (KiB)")):
+    for ax, xkey, xlabel in (
+        (axes[0], "total_kib", "stored size, whole model (KiB)"),
+        (axes[1], "block_kib", "stored size, block linears only (KiB)"),
+    ):
         for fam, (color, marker) in style.items():
             pts = sorted((a for a in agg if a["family"] == fam), key=lambda a: a[xkey])
             if not pts:
                 continue
-            ax.errorbar([a[xkey] for a in pts], [a["mean"] for a in pts], yerr=[a["std"] for a in pts],
-                        color=color, marker=marker, ms=6, lw=1.8, capsize=3, label=fam)
+            ax.errorbar(
+                [a[xkey] for a in pts],
+                [a["mean"] for a in pts],
+                yerr=[a["std"] for a in pts],
+                color=color,
+                marker=marker,
+                ms=6,
+                lw=1.8,
+                capsize=3,
+                label=fam,
+            )
             for a in pts:
                 tag = f"{a['block_bpw']:.2f}" if fam.startswith("LittleBit") else f"d{a['d_model']}"
-                ax.annotate(tag, (a[xkey], a["mean"]), textcoords="offset points", xytext=(5, 5),
-                            fontsize=7.5, color=color)
+                ax.annotate(
+                    tag, (a[xkey], a["mean"]), textcoords="offset points", xytext=(5, 5), fontsize=7.5, color=color
+                )
         ax.set_xlabel(xlabel)
         ax.grid(alpha=0.25)
         for s in ("top", "right"):
@@ -146,11 +201,15 @@ def plot(agg: list[dict], png: str):
 
 
 def table(agg: list[dict]) -> str:
-    lines = ["| model | d_model | block bpw | block linears | whole model | trainable params | eval loss (mean ± sd) |",
-             "|---|---|---|---|---|---|---|"]
+    lines = [
+        "| model | d_model | block bpw | block linears | whole model | trainable params | eval loss (mean ± sd) |",
+        "|---|---|---|---|---|---|---|",
+    ]
     for a in sorted(agg, key=lambda a: a["total_kib"]):
-        lines.append(f"| {a['family']} | {a['d_model']} | {a['block_bpw']:.2f} | {a['block_kib']:.1f} KiB | "
-                     f"{a['total_kib']:.1f} KiB | {a['params']:,} | {a['mean']:.3f} ± {a['std']:.3f} |")
+        lines.append(
+            f"| {a['family']} | {a['d_model']} | {a['block_bpw']:.2f} | {a['block_kib']:.1f} KiB | "
+            f"{a['total_kib']:.1f} KiB | {a['params']:,} | {a['mean']:.3f} ± {a['std']:.3f} |"
+        )
     return "\n".join(lines)
 
 

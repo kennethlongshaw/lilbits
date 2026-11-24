@@ -27,3 +27,24 @@ packages = ["src/lilbits"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["results"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "RUF"]
+ignore = [
+    "E731",    # lambda assignment: used for short local helpers
+    "RUF001", "RUF002", "RUF003",  # ambiguous unicode (×, ±, → in docs and tables are intended)
+    "E741",    # single-letter names follow the papers' notation (l, O)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B"]
+"benchmarks/*" = ["B023"]  # timing lambdas are called immediately inside the loop
+"src/lilbits/training/train.py" = ["B008"]  # dataclass defaults are the jsonargparse CLI pattern
+
+[tool.ty.environment]
+python-version = "3.11"

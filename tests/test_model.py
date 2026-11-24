@@ -1,4 +1,5 @@
 import math
+from typing import Any
 
 import pytest
 import torch
@@ -8,7 +9,7 @@ from lilbits.layers.littlebit import LittleBitLinear
 from lilbits.models.tinylm import Config, TinyLM, TransformerBlock, compression_report, make_linear_factory
 from lilbits.training.train import TrainConfig, train
 
-TINY = dict(vocab_size=16, seq_len=16, d_model=32, n_heads=2, n_layers=1)
+TINY: dict[str, Any] = dict(vocab_size=16, seq_len=16, d_model=32, n_heads=2, n_layers=1)
 
 
 @pytest.mark.parametrize("linear", ["fp", "littlebit"])
@@ -49,9 +50,22 @@ def test_markov_source():
 def test_training_from_scratch_learns(linear):
     """A short from-scratch run beats the best context-free (unigram) predictor."""
     src = MarkovSource(vocab=8, order=1, branching=2, seed=0)
-    cfg = Config(vocab_size=8, seq_len=16, d_model=32, n_heads=2, n_layers=1, linear=linear,
-                 bpw=2.0, residual=False, ste="clipped")
-    res = train(cfg, TrainConfig(steps=300, batch=32, lr=3e-3, log_every=100, latent_lr_mult=0.1, verbose=False, accelerator="cpu"), src)
+    cfg = Config(
+        vocab_size=8,
+        seq_len=16,
+        d_model=32,
+        n_heads=2,
+        n_layers=1,
+        linear=linear,
+        bpw=2.0,
+        residual=False,
+        ste="clipped",
+    )
+    res = train(
+        cfg,
+        TrainConfig(steps=300, batch=32, lr=3e-3, log_every=100, latent_lr_mult=0.1, verbose=False, accelerator="cpu"),
+        src,
+    )
     eval_b = res["history"]
     assert eval_b[-1]["eval"] < eval_b[0]["eval"] - 0.3
     assert eval_b[-1]["eval"] < math.log(8) - 0.3
@@ -75,7 +89,21 @@ def test_muon_gets_2d_block_matrices_only():
 
 def test_training_with_muon_learns():
     src = MarkovSource(vocab=8, order=1, branching=2, seed=0)
-    cfg = Config(vocab_size=8, seq_len=16, d_model=32, n_heads=2, n_layers=1, linear="littlebit",
-                 bpw=2.0, residual=False)
-    res = train(cfg, TrainConfig(steps=300, batch=32, lr=3e-3, log_every=100, latent_lr_mult=1.0, optim="muon", verbose=False, accelerator="cpu"), src)
+    cfg = Config(
+        vocab_size=8, seq_len=16, d_model=32, n_heads=2, n_layers=1, linear="littlebit", bpw=2.0, residual=False
+    )
+    res = train(
+        cfg,
+        TrainConfig(
+            steps=300,
+            batch=32,
+            lr=3e-3,
+            log_every=100,
+            latent_lr_mult=1.0,
+            optim="muon",
+            verbose=False,
+            accelerator="cpu",
+        ),
+        src,
+    )
     assert res["history"][-1]["eval"] < math.log(8) - 0.3

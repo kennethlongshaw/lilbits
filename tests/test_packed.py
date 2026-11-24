@@ -3,9 +3,9 @@ import io
 import pytest
 import torch
 
+from lilbits.inference.packed import PackedLittleBitLinear, model_bytes, pack_model, pack_signs, unpack_signs
 from lilbits.layers.littlebit import LittleBitLinear
 from lilbits.models.tinylm import Config, TinyLM
-from lilbits.inference.packed import PackedLittleBitLinear, model_bytes, pack_model, pack_signs, unpack_signs
 
 
 @pytest.mark.parametrize("r", [1, 7, 8, 13, 64])

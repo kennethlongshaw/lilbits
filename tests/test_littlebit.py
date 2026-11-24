@@ -1,5 +1,3 @@
-import math
-
 import pytest
 import torch
 
@@ -32,6 +30,7 @@ def test_smoothsign_gradient_is_tanh_derivative():
 def test_clipped_ste_gradient():
     x = torch.tensor([-2.0, -0.5, 0.0, 0.5, 2.0], requires_grad=True)
     binarize(x, "clipped").sum().backward()
+    assert x.grad is not None
     assert x.grad.tolist() == [0.0, 1.0, 1.0, 1.0, 0.0]
 
 
@@ -46,6 +45,7 @@ def test_forward_matches_materialized_weight(residual, bias):
     x = torch.randn(3, 5, 24)
     expected = x @ layer.weight().t()
     if bias:
+        assert layer.bias is not None
         expected = expected + layer.bias
     torch.testing.assert_close(layer(x), expected, rtol=1e-4, atol=1e-5)
 
@@ -128,6 +128,7 @@ def test_inference_cache_matches_training_forward(rank):
     layer.eval()
     with torch.no_grad():
         y_inf = layer(x)
+        assert layer._infer_cache is not None
         assert layer._infer_cache[0] == ("dense" if rank == 30 else "lowrank")
     torch.testing.assert_close(y_inf, y_train, rtol=1e-4, atol=1e-5)
 

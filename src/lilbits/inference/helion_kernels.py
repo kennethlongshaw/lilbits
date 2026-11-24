@@ -22,10 +22,9 @@ from __future__ import annotations
 
 import os
 
-import torch
-
 import helion
 import helion.language as hl
+import torch
 
 _FULL = os.environ.get("LB_HELION_AUTOTUNE") == "1"
 

@@ -35,15 +35,38 @@ def test_deepseek_muon_rejects_1d():
 
 
 def test_make_optimizers_muon_ds():
-    model = TinyLM(Config(vocab_size=16, seq_len=16, d_model=64, n_heads=2, n_layers=1, linear="littlebit",
-                          bpw=4.0, qk_norm=True))
+    model = TinyLM(
+        Config(vocab_size=16, seq_len=16, d_model=64, n_heads=2, n_layers=1, linear="littlebit", bpw=4.0, qk_norm=True)
+    )
     ds, adam = make_optimizers(model, TrainConfig(lr=1e-3, optim="muon_ds"))
     assert isinstance(ds, DeepSeekMuon) and isinstance(adam, torch.optim.AdamW)
 
 
 def test_qk_norm_training_with_deepseek_muon_learns():
     src = MarkovSource(vocab=8, order=1, branching=2, seed=0)
-    cfg = Config(vocab_size=8, seq_len=16, d_model=32, n_heads=2, n_layers=1, linear="littlebit",
-                 bpw=2.0, residual=False, qk_norm=True)
-    res = train(cfg, TrainConfig(steps=300, batch=32, lr=3e-3, log_every=100, latent_lr_mult=1.0, optim="muon_ds", verbose=False, accelerator="cpu"), src)
+    cfg = Config(
+        vocab_size=8,
+        seq_len=16,
+        d_model=32,
+        n_heads=2,
+        n_layers=1,
+        linear="littlebit",
+        bpw=2.0,
+        residual=False,
+        qk_norm=True,
+    )
+    res = train(
+        cfg,
+        TrainConfig(
+            steps=300,
+            batch=32,
+            lr=3e-3,
+            log_every=100,
+            latent_lr_mult=1.0,
+            optim="muon_ds",
+            verbose=False,
+            accelerator="cpu",
+        ),
+        src,
+    )
     assert res["history"][-1]["eval"] < math.log(8) - 0.3

@@ -2,7 +2,6 @@ import math
 
 import pytest
 import torch
-import torch.nn.functional as F
 
 from lilbits.data import MarkovSource
 from lilbits.mixers.recurrent import MIXERS, gated_linear_rule, mingru_rule, mlstm_rule
@@ -12,7 +11,7 @@ from lilbits.training.train import TrainConfig, make_optimizers, train
 NEW = ["mamba2", "gla", "mlstm", "mingru"]
 
 
-@pytest.mark.parametrize("mixer", NEW + ["gdn"])
+@pytest.mark.parametrize("mixer", [*NEW, "gdn"])
 @pytest.mark.parametrize("linear", ["fp", "littlebit", "bitnet"])
 def test_block_shape_and_causality(mixer, linear):
     torch.manual_seed(0)
@@ -26,7 +25,7 @@ def test_block_shape_and_causality(mixer, linear):
     torch.testing.assert_close(block(x2)[:, :6], y[:, :6])
 
 
-@pytest.mark.parametrize("mixer", NEW + ["gdn"])
+@pytest.mark.parametrize("mixer", [*NEW, "gdn"])
 def test_module_returns_state_and_gradients_flow(mixer):
     torch.manual_seed(0)
     m = MIXERS[mixer](32, 2, make_linear_factory(Config(linear="fp")))
@@ -64,7 +63,7 @@ def test_mlstm_stabilized_matches_naive_and_chunks():
     B, T, H, D = 2, 8, 2, 4
     q, k, v = torch.randn(B, T, H, D), torch.randn(B, T, H, D) / 2, torch.randn(B, T, H, D)
     i_pre, f_pre = torch.randn(B, T, H), torch.randn(B, T, H) + 2
-    h, st = mlstm_rule(q, k, v, i_pre, f_pre)
+    h, _st = mlstm_rule(q, k, v, i_pre, f_pre)
     C = torch.zeros(B, H, D, D)
     n = torch.zeros(B, H, D)
     for t in range(T):  # unstabilized reference (fine for these small gate values)
@@ -74,14 +73,14 @@ def test_mlstm_stabilized_matches_naive_and_chunks():
         ref = torch.einsum("bhkv,bhk->bhv", C, q[:, t]) / (n * q[:, t]).sum(-1).abs().clamp_min(1.0)[..., None]
         torch.testing.assert_close(h[:, t], ref, atol=1e-4, rtol=1e-4)
     a, sa = mlstm_rule(q[:, :3], k[:, :3], v[:, :3], i_pre[:, :3], f_pre[:, :3])
-    b, sb = mlstm_rule(q[:, 3:], k[:, 3:], v[:, 3:], i_pre[:, 3:], f_pre[:, 3:], initial_state=sa)
+    b, _sb = mlstm_rule(q[:, 3:], k[:, 3:], v[:, 3:], i_pre[:, 3:], f_pre[:, 3:], initial_state=sa)
     torch.testing.assert_close(torch.cat([a, b], 1), h)
 
 
 def test_mingru_is_a_lerp_and_chunks():
     torch.manual_seed(0)
     z, ht = torch.rand(2, 6, 5), torch.randn(2, 6, 5)
-    h, S = mingru_rule(z, ht)
+    h, _S = mingru_rule(z, ht)
     ref, prev = [], torch.zeros(2, 5)
     for t in range(6):
         prev = (1 - z[:, t]) * prev + z[:, t] * ht[:, t]
