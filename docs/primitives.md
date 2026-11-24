@@ -22,29 +22,29 @@ testable on its own and has a dense FP reference.
 | | Byte-level input with dynamic patching instead of a tokenizer: BLT entropy patches, H-Net learned chunks | ✅ | `models/byte_latent.py`, `examples/07_byte_level_patching.py` |
 | Looped core | Shared-weight block applied N times (prelude / core / coda, input injection, sandwich norm) | ✅ | `models/recurrent_depth.py`, `examples/06_looped_reasoning_lm.py` |
 | | Sampled depth + truncated backprop (Huginn); learned exit gate (Ouro) | ✅ | `models/recurrent_depth.py` |
-| | Per-loop FP scales (h, g, l) over shared LittleBit signs | ⬜ (LittleBit already separates signs from scales, so this is a small change) | |
-| | Per-loop GDN state | ⬜ | |
-| | Loop memory: attend over passes 1..i of the same token | ⬜ | |
+| | Per-loop FP scales (h, g, l) over shared LittleBit signs | ✅ | `layers/loop_scaled.py` |
+| | Per-loop GDN state (shared weights, FP gates) | ✅ | `models/looped_index.py` |
+| | Loop memory: attend over passes 1..i of the same token | ✅ | `mixers/loop_memory.py` |
 | | Adaptive exit: freeze a position's state when KL between steps is small, or gate CDF ≥ q | ✅ (full-sequence; no KV-cache sharing across loops yet) | `models/recurrent_depth.py` |
-| | Halting for decode, copying state forward into skipped loops' GDN | ⬜ | |
-| Index / retrieval | 4-bit K/V cache with GQA | ⬜ | |
-| | sign(K) signatures + XOR/popcount scoring | ⬜ (reuses `pack_signs` bit layout) | `inference/packed.py` |
-| | Block summaries every 64 tokens (shallow from prelude, deep from final loop) | ⬜ | |
-| | Top-k exact attention with dense fallback when scores are flat | ⬜ | |
-| | Indexer trained to match dense attention | ⬜ | |
-| Coda | Higher-precision tail layers | ✅ (any `linear` choice per block) | `models/tinylm.py` |
-| | Sequential MTP heads for k drafts | ⬜ | |
-| Verify | k-position parallel verify, accept the longest prefix, roll back index/state | ⬜ | |
-| | Adaptive k from acceptance rate | ⬜ | |
+| | Halting for decode, copying state forward into skipped loops' GDN | ✅ (relative state change threshold) | `models/looped_index.py` |
+| Index / retrieval | 4-bit K/V cache with GQA (one KV head) | ✅ | `mixers/sparse_index.py` |
+| | sign(K) signatures + XOR/popcount scoring | ✅ | `mixers/sparse_index.py` |
+| | Block summaries every 64 tokens (shallow from prelude, deep from final loop) | ✅ | `mixers/sparse_index.py`, `models/looped_index.py` |
+| | Top-k exact attention with dense fallback when scores are flat | ✅ (masked dense compute; no sparse gather kernel yet) | `mixers/sparse_index.py` |
+| | Indexer trained to match dense attention (KL on block mass) | ✅ | `mixers/sparse_index.py` |
+| Coda | Higher-precision tail layers | ✅ FP GDN coda | `models/looped_index.py` |
+| | Sequential MTP heads for k drafts | ✅ | `models/looped_index.py` |
+| Verify | k-position parallel verify, accept the longest prefix, roll back index/state | ✅ output identical to greedy (tested) | `models/looped_index.py`, `examples/09_looped_index_lm.py` |
+| | Adaptive k from acceptance rate | ✅ | `models/looped_index.py` |
 | Decision models (Jev-style) | Stateful blocks, state fork per question, typed readout over tied code rows, per-type temperature | ✅ | `models/decision.py`, `examples/04_decision_model.py` |
 | | Proper scoring (log loss, CRPS, Brier), ECE, code-swap flip rate | ✅ | `models/decision.py` |
 | | MoE FFN with FP router, per-question halting | ⬜ | |
 | Training objectives | LLM-JEPA: JEPA embedding loss next to next-token loss, [PRED]-token predictor, block-causal packing, EMA target, loss dropout | ✅ | `models/jepa.py`, `examples/08_llm_jepa.py` |
 | Training | Fabric loop, Muon / DeepSeek Muon, FP warm start → LittleBit conversion, Optuna | ✅ | `train.py`, `training/optim.py`, `training/tune.py` |
-| | Staged curriculum (looped FP → LittleBit → index → MTP → halting) | ⬜ | |
+| | Staged curriculum (looped FP → LittleBit → index → MTP → halting) with a dense FP reference | ✅ smoke-tested | `examples/09_looped_index_lm.py` |
 | Eval | Wall, CPU, peak RSS, RAM, disk for any code block (`Meter`, `size_report`) | ✅ | `measure.py` |
 | | Loss vs stored size frontier, full train/inference compare, all examples side by side | ✅ | `benchmarks/` |
-| | Long-context recall and multi-hop tasks | ⬜ (current Markov data can't measure them) | |
+| | Long-context recall and multi-hop tasks | ✅ generator; nothing trained long enough to pass them yet | `data.py` (`RecallSource`) |
 
 ## What the measurements so far say for this design
 
@@ -56,7 +56,11 @@ testable on its own and has a dense FP reference.
 - `pack_signs` already produces the bit layout needed for sign(K) signatures, so XOR/popcount retrieval
   can reuse it.
 
-## Suggested build order (matches the training stages)
+The whole design is assembled in `models/looped_index.py` (`LoopedIndexLM`) and trained stage by stage in
+`examples/09_looped_index_lm.py`. Still open: chunked GDN, INT8 scales, a sparse-gather retrieval kernel, LUT
+kernels inside the looped core, and a training run long enough to measure recall.
+
+## Build order (matches the training stages)
 
 1. Tied embeddings; looped GDN core with a fixed N; loop memory; chunked GDN. Train in FP.
 2. LittleBit core with shared signs and per-loop scales; INT8 scales.

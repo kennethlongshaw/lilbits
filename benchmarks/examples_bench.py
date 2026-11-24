@@ -36,6 +36,7 @@ RUNS = [
     ("06 looped LM, Ouro exit gate", ["examples/06_looped_reasoning_lm.py", "--exit-gate"]),
     ("07 byte-level: baseline / BLT / H-Net", ["examples/07_byte_level_patching.py"]),
     ("08 LLM-JEPA (LM / online / EMA / EMA+dropout)", ["examples/08_llm_jepa.py"]),
+    ("09 looped index LM (5 stages + decode modes)", ["examples/09_looped_index_lm.py"]),
 ]
 
 
@@ -81,6 +82,12 @@ def table(rows: list[dict]) -> str:
                 f"train {v['train_wall_s']:.1f}s, infer {v['infer_wall_s'] * 1e3:.0f} ms, "
                 f"{v['stored_bytes'] / 1024:,.0f} KiB"
                 for k, v in m["models"].items()
+            )
+        elif "decode" in m:  # looped index LM decode modes
+            infer = "; ".join(
+                f"{k}: {v['decode_wall_s'] * 1e3:.0f} ms, {v['tokens_per_pass']:.1f} tok/pass, "
+                f"{v['mean_loops']:.1f} loops"
+                for k, v in m["decode"].items()
             )
         elif "variants" in m:  # LLM-JEPA variants
             infer = "; ".join(

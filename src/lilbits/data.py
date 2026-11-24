@@ -98,3 +98,52 @@ class PairedViewSource:
     def sample(self, batch: int) -> tuple[torch.Tensor, torch.Tensor]:
         text = torch.randint(0, self.n, (batch, self.length), generator=self._g)
         return text, self.sub[text.flip(1)]
+
+
+class RecallSource:
+    """Long-context recall and multi-hop sequences, to measure what loss alone does not.
+
+    Token ids: symbols [0, n_symbols), filler [n_symbols, n_symbols + n_filler), then QUERY_1HOP, QUERY_2HOP.
+    A sequence of `length` tokens is filler with `n_pairs` (key, value) pairs of symbols written at random
+    positions, ending with a question and its answer as the last token:
+
+        recall    ... k v ... [Q1] k  v       value written next to k, possibly thousands of tokens back
+        multi-hop ... a b ... b c ... [Q2] a  c   follow a -> b -> c across two facts
+
+    Keys within a sequence are distinct, so the answer is unique. `sample` returns (tokens, kind) where kind is
+    0 for recall and 1 for multi-hop; the answer is tokens[:, -1], predicted at position -2.
+    """
+
+    def __init__(self, n_symbols: int = 24, n_filler: int = 6, n_pairs: int = 4, length: int = 256, seed: int = 0):
+        assert 2 * n_pairs + 2 <= n_symbols
+        self.n_symbols, self.n_filler, self.n_pairs, self.length = n_symbols, n_filler, n_pairs, length
+        self.q1, self.q2 = n_symbols + n_filler, n_symbols + n_filler + 1
+        self.vocab = n_symbols + n_filler + 2
+        self._g = torch.Generator().manual_seed(seed)
+
+    def _one(self, two_hop: bool) -> torch.Tensor:
+        g, L = self._g, self.length
+        seq = torch.randint(self.n_symbols, self.n_symbols + self.n_filler, (L,), generator=g)
+        syms = torch.randperm(self.n_symbols, generator=g)
+        if two_hop:  # chain a -> b -> c, plus distractor pairs
+            a, b, c = syms[:3].tolist()
+            pairs = [(a, b), (b, c)] + [
+                (syms[3 + 2 * i].item(), syms[4 + 2 * i].item()) for i in range(self.n_pairs - 2)
+            ]
+            question, answer = (self.q2, a), c
+        else:
+            pairs = [(syms[2 * i].item(), syms[2 * i + 1].item()) for i in range(self.n_pairs)]
+            question, answer = (self.q1, pairs[0][0]), pairs[0][1]
+        # non-overlapping slots in [0, L - 3), in random order
+        slots = torch.randperm((L - 3) // 2, generator=g)[: len(pairs)].sort().values * 2
+        order = torch.randperm(len(pairs), generator=g)
+        if two_hop:  # keep a -> b before b -> c so the chain can be followed left to right
+            order = torch.cat([torch.tensor([0, 1]), order[order > 1]])
+        for slot, j in zip(slots.tolist(), order.tolist(), strict=True):
+            seq[slot], seq[slot + 1] = pairs[j]
+        seq[L - 3], seq[L - 2], seq[L - 1] = question[0], question[1], answer
+        return seq
+
+    def sample(self, batch: int, two_hop_frac: float = 0.5) -> tuple[torch.Tensor, torch.Tensor]:
+        kind = (torch.rand(batch, generator=self._g) < two_hop_frac).long()
+        return torch.stack([self._one(bool(k)) for k in kind.tolist()]), kind
