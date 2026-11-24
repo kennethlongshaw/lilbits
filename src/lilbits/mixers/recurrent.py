@@ -13,9 +13,10 @@ GatedDeltaNet follows Yang et al., "Gated Delta Networks: Improving Mamba2 with 
     S_t = S_t + beta_t * k_t (v_t - S_t^T k_t)^T   (delta-rule write, ||k_t|| = 1)
     o_t = S_t^T q_t
 
-The recurrence here is the naive per-token loop: exact and easy to read, fine for the short
-sequences in this repo, slow for long ones. `fla.ops.gated_delta_rule.chunk_gated_delta_rule`
-computes the same thing with chunked Triton kernels on GPU.
+Two equivalent implementations: `gated_delta_rule`, the naive per-token loop (exact, easy to read, used for
+single-token decode), and `chunk_gated_delta_rule`, the chunkwise-parallel form (WY representation, as in
+`fla`'s chunk kernels) that does C tokens per step with matmuls and is what `GatedDeltaNet` uses for training and
+prefill. `fla.ops.gated_delta_rule.chunk_gated_delta_rule` is the fused Triton version of the same algorithm.
 """
 
 from __future__ import annotations
@@ -62,6 +63,53 @@ def gated_delta_rule(q, k, v, g, beta, initial_state=None):
     return torch.stack(out, dim=1), S
 
 
+def chunk_gated_delta_rule(q, k, v, g, beta, initial_state=None, chunk: int = 64):
+    """Chunkwise-parallel gated delta rule: same inputs, outputs and final state as `gated_delta_rule`.
+
+    Within a chunk of C tokens, the delta-rule writes form a unit lower-triangular system: with
+    G_ij = exp(gcum_i - gcum_j) and M = strictly_lower((beta k) k^T * G), the chunk's effective writes are
+    U = (I + M)^-1 (beta v) and W = (I + M)^-1 (beta k exp(gcum)) (the WY representation). Then
+        new values      V' = U - W S
+        outputs         o  = (q exp(gcum)) S + lower((q k^T) * G) V'
+        next state      S  = exp(gcum_C) S + (k exp(gcum_C - gcum))^T V'
+    so each chunk is a handful of (C x C) and (C x D) matmuls instead of C sequential rank-1 updates.
+    """
+    B, T, H, Dk = k.shape
+    Dv = v.shape[-1]
+    C = min(chunk, T)
+    pad = (-T) % C
+    if pad:  # padded tokens: beta = 0, g = 0 -> no write, no decay
+        q, k, v = (F.pad(t, (0, 0, 0, 0, 0, pad)) for t in (q, k, v))
+        g, beta = F.pad(g, (0, 0, 0, pad)), F.pad(beta, (0, 0, 0, pad))
+    n = (T + pad) // C
+
+    def chunks(t):  # (B, T, H, ...) -> (B, H, n, C, ...)
+        return t.view(B, n, C, H, *t.shape[3:]).transpose(1, 3).transpose(2, 3)
+
+    q, k, v, g, beta = map(chunks, (q, k, v, g, beta))
+    gc = g.cumsum(-1)  # B, H, n, C
+    G = (gc[..., :, None] - gc[..., None, :]).tril().exp().tril()  # decay from j to i, i >= j
+    kb = k * beta[..., None]
+    eye = torch.eye(C, dtype=q.dtype, device=q.device)
+    M = ((kb @ k.transpose(-1, -2)) * G).tril(-1)
+    Tinv = torch.linalg.solve_triangular(eye + M, eye.expand_as(M), upper=False)
+    U = Tinv @ (v * beta[..., None])
+    W = Tinv @ (kb * gc.exp()[..., None])
+    S = q.new_zeros(B, H, Dk, Dv) if initial_state is None else initial_state
+    causal = (q @ k.transpose(-1, -2)) * G  # already lower-triangular through G
+    outs = []
+    for i in range(n):
+        Vn = U[:, :, i] - W[:, :, i] @ S
+        outs.append((q[:, :, i] * gc[:, :, i, :, None].exp()) @ S + causal[:, :, i] @ Vn)
+        last = gc[:, :, i, -1]
+        S = (
+            S * last.exp()[..., None, None]
+            + (k[:, :, i] * (last[..., None] - gc[:, :, i]).exp()[..., None]).transpose(-1, -2) @ Vn
+        )
+    o = torch.stack(outs, 2).reshape(B, H, n * C, Dv).transpose(1, 2)[:, :T]
+    return o, S
+
+
 class GatedDeltaNet(nn.Module):
     def __init__(self, d_model: int, n_heads: int, linear: LinearFactory, conv_size: int = 4, lb_gates: bool = False):
         super().__init__()
@@ -85,6 +133,7 @@ class GatedDeltaNet(nn.Module):
         dt = torch.exp(torch.rand(n_heads) * (math.log(0.1) - math.log(1e-3)) + math.log(1e-3)).clamp_min(1e-4)
         self.dt_bias = nn.Parameter(dt + torch.log(-torch.expm1(-dt)))  # inverse softplus
         self.o_norm = nn.RMSNorm(self.head_dim)
+        self.chunk_min = 16  # sequences at least this long use the chunked rule; shorter (decode) the naive loop
 
     def forward(self, x: torch.Tensor, initial_state=None, return_state: bool = False):
         B, T, C = x.shape
@@ -98,7 +147,8 @@ class GatedDeltaNet(nn.Module):
         v = heads(self.conv_v(self.v(x)))
         beta = torch.sigmoid(self.b(x))
         g = -self.A_log.exp() * F.softplus(self.a(x) + self.dt_bias)
-        o, S = gated_delta_rule(q, k, v, g, beta, initial_state)
+        rule = chunk_gated_delta_rule if T >= self.chunk_min else gated_delta_rule
+        o, S = rule(q, k, v, g, beta, initial_state)
         o = self.o_norm(o) * F.silu(heads(self.gate(x)))
         out = self.o(o.reshape(B, T, C))
         return (out, S) if return_state else out

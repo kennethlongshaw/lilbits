@@ -16,7 +16,7 @@ testable on its own and has a dense FP reference.
 | | Cheaper scales (INT8 h/g), uneven bpw allocation per layer type | ⬜ | |
 | Prelude / core mixer | Gated DeltaNet (fixed-size state, FP gates option) | ✅ naive per-token loop | `mixers/recurrent.py` |
 | | Other recurrent mixers: Mamba2 (SSD), GLA / RWKV-6 style, xLSTM mLSTM, minGRU | ✅ naive loops, smoke-tested only | `mixers/recurrent.py` |
-| | Chunked GDN for training speed (or `fla` kernel hook) | ⬜ | |
+| | Chunked GDN for training speed (chunkwise WY form, exact vs the naive loop incl. gradients) | ✅ 5–16× faster fwd+bwd, ~3× less memory (`results/gdn_bench.md`) | `mixers/recurrent.py`, `benchmarks/gdn_bench.py` |
 | | State carry / rollback API (`initial_state` in, final state out) | ✅ every mixer; conv state not carried (use `conv_size=1`) | `mixers/recurrent.py`, `examples/03_state_rollback.py` |
 | Embed | Tied embedding / LM head | ✅ (looped LM) | `models/recurrent_depth.py` |
 | | Byte-level input with dynamic patching instead of a tokenizer: BLT entropy patches, H-Net learned chunks | ✅ | `models/byte_latent.py`, `examples/07_byte_level_patching.py` |
@@ -57,7 +57,7 @@ testable on its own and has a dense FP reference.
   can reuse it.
 
 The whole design is assembled in `models/looped_index.py` (`LoopedIndexLM`) and trained stage by stage in
-`examples/09_looped_index_lm.py`. Still open: chunked GDN, INT8 scales, a sparse-gather retrieval kernel, LUT
+`examples/09_looped_index_lm.py`. Still open: INT8 scales, a sparse-gather retrieval kernel, LUT
 kernels inside the looped core, and a training run long enough to measure recall.
 
 ## Build order (matches the training stages)

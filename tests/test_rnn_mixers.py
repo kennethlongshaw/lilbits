@@ -105,3 +105,27 @@ def test_training_learns(mixer):
     res = train(cfg, TrainConfig(steps=200, batch=32, lr=3e-3, log_every=100, verbose=False, accelerator="cpu"), src)
     hist = res["history"]
     assert hist[-1]["eval"] < math.log(8) - 0.3
+
+
+@pytest.mark.parametrize("T,chunk", [(5, 64), (64, 16), (77, 32)])
+def test_chunked_gated_delta_rule_matches_naive(T, chunk):
+    import torch.nn.functional as F
+
+    from lilbits.mixers.recurrent import chunk_gated_delta_rule, gated_delta_rule
+
+    torch.manual_seed(0)
+    B, H, D = 2, 2, 8
+    q = (torch.randn(B, T, H, D) * D**-0.5).requires_grad_()
+    k = F.normalize(torch.randn(B, T, H, D), dim=-1).requires_grad_()
+    v = torch.randn(B, T, H, D).requires_grad_()
+    g = (-torch.rand(B, T, H) * 0.5).requires_grad_()
+    beta = torch.rand(B, T, H).requires_grad_()
+    S0 = torch.randn(B, H, D, D)
+    o1, S1 = gated_delta_rule(q, k, v, g, beta, S0)
+    grads1 = torch.autograd.grad((o1.square().sum() + S1.sum()), (q, k, v, g, beta))
+    o2, S2 = chunk_gated_delta_rule(q, k, v, g, beta, S0, chunk=chunk)
+    grads2 = torch.autograd.grad((o2.square().sum() + S2.sum()), (q, k, v, g, beta))
+    torch.testing.assert_close(o2, o1, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(S2, S1, rtol=1e-4, atol=1e-4)
+    for a, b in zip(grads1, grads2, strict=True):
+        torch.testing.assert_close(b, a, rtol=1e-3, atol=1e-3)

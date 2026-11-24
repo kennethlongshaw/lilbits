@@ -198,7 +198,10 @@ FP16 baseline on seed 0: 0.984 default, 0.978 tuned.
 linear-attention mixer in the Qwen3-Next / Qwen3.8-Flash-Next hybrids. LittleBit compresses its five
 d×d projections (q, k, v, output gate, o). The per-head decay/beta projections, short convs, `A_log` and
 `dt_bias` stay full precision; `--model.lb_gates true` binarizes the decay/beta projections too. The
-recurrence is a naive per-token loop (`lilbits.mixers.recurrent.gated_delta_rule`): exact, but ~4.5× slower than softmax on CPU.
+results below were measured with the naive per-token loop (`gated_delta_rule`), which was ~4.5× slower than softmax on
+CPU. Sequences of 16+ tokens now use the chunkwise-parallel form (`chunk_gated_delta_rule`, same outputs and
+gradients): forward + backward is 5× faster at 64 tokens and 16× at 1,024, with about 3× less peak memory
+(`results/gdn_bench.md`). Single-token decode still uses the loop.
 
 Seed 0, default settings (AdamW; LittleBit = 300-step FP warm start + SVD+ITQ, `--model.bpw 1.41`),
 1,500 steps, entropy floor 0.895. Logs and JSON in `results/gdn/`.
