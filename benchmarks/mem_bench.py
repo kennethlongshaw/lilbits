@@ -2,7 +2,7 @@
 
 Each case runs in its own process. Linux only (uses /proc to reset/read peak RSS).
 
-    uv run lb-mem-bench
+    uv run python benchmarks/mem_bench.py
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ import time
 import torch
 from torch import nn
 
-from .littlebit import LittleBitLinear
-from .model import Config, TinyLM
-from .packed import model_bytes, pack_model
+from littlebit_scratch.littlebit import LittleBitLinear
+from littlebit_scratch.model import Config, TinyLM
+from littlebit_scratch.packed import model_bytes, pack_model
 
 
 def _trim():
@@ -71,7 +71,7 @@ def build(case: str):
     if variant == "packed":
         pack_model(m) if not isinstance(m, LittleBitLinear) else None
         if isinstance(m, LittleBitLinear):
-            from .packed import PackedLittleBitLinear
+            from littlebit_scratch.packed import PackedLittleBitLinear
             m = PackedLittleBitLinear(m)
     elif variant == "cached":
         with torch.no_grad():
@@ -120,7 +120,7 @@ def main(argv=None):
         return
     rows = []
     for c in args.cases.split(","):
-        o = subprocess.run([sys.executable, "-m", "littlebit_scratch.mem_bench", "--one", c, "--reps", str(args.reps)],
+        o = subprocess.run([sys.executable, __file__, "--one", c, "--reps", str(args.reps)],
                            stdout=subprocess.PIPE, text=True, check=True).stdout
         rows.append(json.loads(o.strip().splitlines()[-1]))
         print(json.dumps(rows[-1]), flush=True)

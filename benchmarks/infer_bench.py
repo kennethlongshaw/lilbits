@@ -1,7 +1,7 @@
 """Inference-speed benchmark: nn.Linear vs LittleBitLinear (cached factors), single layers and TinyLM.
 
-    uv run lb-infer-bench
-    uv run lb-infer-bench --device cuda --dims 4096x4096,4096x11008
+    uv run python benchmarks/infer_bench.py
+    uv run python benchmarks/infer_bench.py --device cuda --dims 4096x4096,4096x11008
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ import time
 import torch
 from torch import nn
 
-from .littlebit import LittleBitLinear
-from .model import Config, TinyLM
+from littlebit_scratch.littlebit import LittleBitLinear
+from littlebit_scratch.model import Config, TinyLM
 
 
 def _time(fn, device: str, reps: int) -> float:

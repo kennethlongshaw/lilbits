@@ -5,9 +5,9 @@ shrink by getting narrower, so they sweep d_model so their stored sizes bracket 
 Every run uses the same data stream and eval batches as lb-tune (MarkovSource seeded by the run seed).
 
     uv sync --extra tune --extra plot
-    uv run lb-frontier --stage grid      # small lr / optimizer grid for BitNet (seed 0)
-    uv run lb-frontier --stage main      # all points on 3 seeds (resumes from the JSONL)
-    uv run lb-frontier --stage plot      # PNG + markdown table
+    uv run python benchmarks/frontier.py --stage grid      # small lr / optimizer grid for BitNet (seed 0)
+    uv run python benchmarks/frontier.py --stage main      # all points on 3 seeds (resumes from the JSONL)
+    uv run python benchmarks/frontier.py --stage plot      # PNG + markdown table
 """
 
 from __future__ import annotations
@@ -21,10 +21,10 @@ from concurrent.futures import ProcessPoolExecutor
 
 import torch
 
-from .bench import size_report
-from .data import MarkovSource
-from .model import Config
-from .train import TrainConfig, train
+from littlebit_scratch.measure import size_report
+from littlebit_scratch.data import MarkovSource
+from littlebit_scratch.model import Config
+from littlebit_scratch.train import TrainConfig, train
 
 # Optuna winners from results/optuna (tuned at d_model 128, LittleBit at 1.41 bpw)
 LB_TUNED = dict(lr=0.017513239557445673, weight_decay=0.01, warmup=100, optim="muon_ds",

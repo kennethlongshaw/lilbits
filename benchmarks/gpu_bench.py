@@ -1,11 +1,11 @@
 """Packed LittleBit inference on GPU: FP16 nn.Linear vs packed (torch backend) vs packed (Helion kernels).
 
     uv sync --extra gpu
-    uv run lb-gpu-bench                                    # first run autotunes (~a few min per shape)
-    LB_HELION_AUTOTUNE=1 uv run lb-gpu-bench               # Helion's full autotuner instead of the candidate list
+    uv run python benchmarks/gpu_bench.py                                    # first run autotunes (~a few min per shape)
+    LB_HELION_AUTOTUNE=1 uv run python benchmarks/gpu_bench.py               # Helion's full autotuner instead of the candidate list
 
 CPU smoke test (tiny shapes, correctness only):
-    HELION_INTERPRET=1 uv run lb-gpu-bench --device cpu --dims 64x96 --tokens 1,5 --bpws 2.0
+    HELION_INTERPRET=1 uv run python benchmarks/gpu_bench.py --device cpu --dims 64x96 --tokens 1,5 --bpws 2.0
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ import time
 import torch
 from torch import nn
 
-from .littlebit import LittleBitLinear
-from .packed import PackedLittleBitLinear
+from littlebit_scratch.littlebit import LittleBitLinear
+from littlebit_scratch.packed import PackedLittleBitLinear
 
 
 def _time(fn, device, reps):

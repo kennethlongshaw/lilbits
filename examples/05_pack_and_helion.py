@@ -3,23 +3,25 @@
 Compares the trained (unpacked) model, the packed model on the PyTorch backend, and the packed model
 on the Helion kernels: eval loss on held-out data, logits agreement, and greedy generation.
 
-    HELION_INTERPRET=1 uv run --extra gpu lb-demo-infer          # CPU: Helion kernels in eager reference mode
-    uv run --extra gpu lb-demo-infer --device cuda                # GPU: compiled Helion kernels
+    HELION_INTERPRET=1 uv run --extra gpu python examples/05_pack_and_helion.py          # CPU: Helion kernels in eager reference mode
+    uv run --extra gpu python examples/05_pack_and_helion.py --device cuda                # GPU: compiled Helion kernels
 """
 
 from __future__ import annotations
 
 import argparse
 import io
+import json
 import time
 
 import torch
 import torch.nn.functional as F
 
-from .data import MarkovSource
-from .model import Config
-from .packed import model_bytes, pack_model, set_backend
-from .train import TrainConfig, train
+from littlebit_scratch.data import MarkovSource
+from littlebit_scratch.measure import Meter, size_report
+from littlebit_scratch.model import Config
+from littlebit_scratch.packed import model_bytes, pack_model, set_backend
+from littlebit_scratch.train import TrainConfig, train
 
 
 @torch.no_grad()
@@ -38,8 +40,8 @@ def generate(model, prompt: torch.Tensor, n: int, seq_len: int) -> torch.Tensor:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--steps", type=int, default=800)
-    ap.add_argument("--fp-warmup", type=int, default=200)
+    ap.add_argument("--steps", type=int, default=60)  # smoke run; raise to actually train
+    ap.add_argument("--fp-warmup", type=int, default=20)
     ap.add_argument("--bpw", type=float, default=1.41)
     ap.add_argument("--gen", type=int, default=24)
     ap.add_argument("--device", default="cpu")
@@ -50,11 +52,12 @@ def main(argv=None):
     cfg = Config(vocab_size=32, seq_len=64, d_model=128, n_heads=4, n_layers=2, linear="littlebit",
                  bpw=args.bpw, itq_iters=50)
     print(f"1) training LittleBit ({args.bpw} bpw) for {args.steps} steps ({args.fp_warmup} FP warm start)...", flush=True)
-    t = time.time()
-    res = train(cfg, TrainConfig(steps=args.steps, log_every=args.steps, fp_warmup=args.fp_warmup, verbose=False,
-                                 accelerator="cuda" if dev == "cuda" else "cpu"), src)
+    with Meter() as train_meter:
+        res = train(cfg, TrainConfig(steps=args.steps, log_every=args.steps, fp_warmup=args.fp_warmup, verbose=False,
+                                     accelerator="cuda" if dev == "cuda" else "cpu"), src)
     model = res["model"].eval()
-    print(f"   done in {time.time() - t:.0f}s, eval loss {res['final_eval']:.4f}")
+    stored = size_report(model)["deployed_total_bytes"]
+    print(f"   done in {train_meter.wall_s:.0f}s, eval loss {res['final_eval']:.4f}")
 
     held_out = [src.sample(16, 64).to(dev) for _ in range(2)]
     floor = sum(src.entropy_floor(b.cpu()) for b in held_out) / 2
@@ -71,15 +74,17 @@ def main(argv=None):
     torch.save(model.state_dict(), buf)
     rows = [("trained, unpacked (FP32 latents)", ref_loss, 0.0, True, ref_bytes, None)]
     gens = {"unpacked": ref_gen}
+    meters = {}
     for backend in ("torch", "helion"):
         set_backend(model, backend)
-        t = time.time()
-        loss = eval_loss(model, held_out)
-        logits = model(held_out[0][:, :-1])
-        gen = generate(model, prompt, args.gen, cfg.seq_len)
+        with Meter() as m:
+            loss = eval_loss(model, held_out)
+            logits = model(held_out[0][:, :-1])
+            gen = generate(model, prompt, args.gen, cfg.seq_len)
+        meters[backend] = m
         gens[backend] = gen
         rows.append((f"packed, {backend} backend", loss, (logits - ref_logits).abs().max().item(),
-                     torch.equal(gen, ref_gen), model_bytes(model), time.time() - t))
+                     torch.equal(gen, ref_gen), model_bytes(model), m.wall_s))
 
     print("\n3) inference on held-out sequences\n")
     print(f"| model | held-out loss (floor {floor:.3f}) | max logit diff vs unpacked | greedy generation identical | weights in RAM | time |")
@@ -88,6 +93,10 @@ def main(argv=None):
         print(f"| {name} | {loss:.4f} | {diff:.2e} | {'yes' if same else 'NO'} | {nbytes / 1024:,.0f} KiB | "
               f"{'' if secs is None else f'{secs:.1f}s'} |")
     print(f"\npacked checkpoint on disk: {buf.tell() / 1024:,.0f} KiB")
+    print("METRICS " + json.dumps({"train_steps": args.steps, **train_meter.as_dict("train_"),
+                                   **meters["torch"].as_dict("infer_torch_"), **meters["helion"].as_dict("infer_helion_"),
+                                   "ram_weights_bytes": model_bytes(model), "checkpoint_bytes": buf.tell(),
+                                   "stored_bytes": stored}))
     print("\ngreedy continuation of the first prompt (prompt | generated):")
     p = prompt.shape[1]
     for k, g in gens.items():

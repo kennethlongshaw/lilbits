@@ -1,5 +1,5 @@
 """Helion kernels: Triton codegen for every candidate config, and numerics in Helion's eager
-reference mode (HELION_INTERPRET=1, runs on CPU). Real-GPU speed is measured by lb-gpu-bench."""
+reference mode (HELION_INTERPRET=1, runs on CPU). Real-GPU speed is measured by python benchmarks/gpu_bench.py."""
 
 import os
 import subprocess

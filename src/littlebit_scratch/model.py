@@ -17,7 +17,7 @@ from torch import nn
 
 from .bitnet import BitLinear
 from .littlebit import LittleBitLinear
-from .mixers import GatedDeltaNet
+from .mixers import MIXERS, GatedDeltaNet
 
 
 @dataclass
@@ -38,7 +38,8 @@ class Config:
     init: str = "small"
     qk_norm: bool = False
     itq_iters: int = 0  # >0: Joint-ITQ rotation before binarizing (svd init / FP warm start)
-    # token mixer: "softmax" (causal attention) or "gdn" (Gated DeltaNet linear attention)
+    # token mixer: "softmax" (causal attention), "gdn" (Gated DeltaNet), "mamba2" (SSD-style SSM),
+    # "gla" (gated linear attention / RWKV-6 style), "mlstm" (xLSTM matrix memory), "mingru" (element-wise RNN)
     mixer: str = "softmax"
     conv_size: int = 4  # gdn: short causal conv kernel on q/k/v
     lb_gates: bool = False  # gdn: also LittleBit the per-head decay/beta projections (default keeps them FP)
@@ -107,6 +108,10 @@ def make_mixer(d_model: int, n_heads: int, linear: LinearFactory, mixer: str = "
         return Attention(d_model, n_heads, linear, qk_norm)
     if mixer == "gdn":
         return GatedDeltaNet(d_model, n_heads, linear, conv_size, lb_gates)
+    if mixer == "gla":
+        return MIXERS[mixer](d_model, n_heads, linear, lb_gates=lb_gates)
+    if mixer in MIXERS:
+        return MIXERS[mixer](d_model, n_heads, linear, conv_size=conv_size, lb_gates=lb_gates)
     raise ValueError(f"unknown mixer {mixer!r}")
 
 

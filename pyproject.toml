@@ -13,13 +13,7 @@ plot = ["matplotlib>=3.8"]
 
 [project.scripts]
 lb-train = "littlebit_scratch.train:main"
-lb-bench = "littlebit_scratch.bench:main"
-lb-infer-bench = "littlebit_scratch.infer_bench:main"
-lb-mem-bench = "littlebit_scratch.mem_bench:main"
-lb-gpu-bench = "littlebit_scratch.gpu_bench:main"
-lb-demo-infer = "littlebit_scratch.demo_infer:main"
 lb-tune = "littlebit_scratch.tune:main"
-lb-frontier = "littlebit_scratch.frontier:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

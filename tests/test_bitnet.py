@@ -43,3 +43,20 @@ def test_tinylm_bitnet_trains_one_step():
     loss = torch.nn.functional.cross_entropy(model(idx).flatten(0, 1), idx.flatten())
     loss.backward()
     assert all(p.grad is not None for p in model.parameters())
+
+
+def test_eval_cache_and_packed_match_training_forward():
+    from littlebit_scratch.bitnet import PackedBitLinear
+
+    torch.manual_seed(0)
+    m = BitLinear(37, 11)
+    x = torch.randn(5, 37)
+    ref = m(x).detach()
+    m.eval()
+    with torch.no_grad():
+        torch.testing.assert_close(m(x), ref)
+        p = PackedBitLinear(m)
+        torch.testing.assert_close(p(x), ref, atol=2e-3, rtol=2e-3)  # FP16 scale
+    assert p.codes.numel() == -(-37 * 11 // 4)
+    m.train()
+    assert m._infer_w is None

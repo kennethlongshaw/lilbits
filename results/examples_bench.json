@@ -1,0 +1,307 @@
+[
+  {
+    "name": "01 train+pack, LittleBit",
+    "cmd": [
+      "examples/01_train_and_pack.py",
+      "--linear",
+      "littlebit"
+    ],
+    "ok": true,
+    "wall_s": 11.816651190999437,
+    "cpu_s": 12.014367,
+    "cpu_util": 1.016731966257171,
+    "peak_rss_mib": 898.47265625,
+    "metrics": {
+      "train_steps": 60,
+      "train_wall_s": 7.509379051999531,
+      "train_cpu_s": 7.756906944000001,
+      "train_cpu_util": 1.0329624980023562,
+      "train_peak_extra_mib": 102.546875,
+      "infer_ms_per_batch": 27.92137910000747,
+      "infer_cpu_ms_per_batch": 28.945701099999965,
+      "infer_peak_extra_mib": 15.4375,
+      "ram_weights_bytes": 140000,
+      "checkpoint_bytes": 163769,
+      "stored_bytes": 103392.0
+    },
+    "tail": [
+      "littlebit: eval loss 3.184 (floor ~0.89), block bpw 1.40, stored 101.0 KiB",
+      "packed: 1603 KiB -> 137 KiB in RAM, eval loss 3.184, 27.9 ms per 32x63 batch",
+      "METRICS {\"train_steps\": 60, \"train_wall_s\": 7.509379051999531, \"train_cpu_s\": 7.756906944000001, \"train_cpu_util\": 1.0329624980023562, \"train_peak_extra_mib\": 102.546875, \"infer_ms_per_batch\": 27.92137910000747, \"infer_cpu_ms_per_batch\": 28.945701099999965, \"infer_peak_extra_mib\": 15.4375, \"ram_weights_bytes\": 140000, \"checkpoint_bytes\": 163769, \"stored_bytes\": 103392.0}"
+    ]
+  },
+  {
+    "name": "01 train+pack, BitNet",
+    "cmd": [
+      "examples/01_train_and_pack.py",
+      "--linear",
+      "bitnet"
+    ],
+    "ok": true,
+    "wall_s": 12.472400687999652,
+    "cpu_s": 12.647265,
+    "cpu_util": 1.0140201005704215,
+    "peak_rss_mib": 901.25,
+    "metrics": {
+      "train_steps": 60,
+      "train_wall_s": 7.9733352489993194,
+      "train_cpu_s": 8.232940223,
+      "train_cpu_util": 1.0325591444349793,
+      "train_peak_extra_mib": 132.59375,
+      "infer_ms_per_batch": 36.724863299969,
+      "infer_cpu_ms_per_batch": 38.481075700000034,
+      "infer_peak_extra_mib": 21.93359375,
+      "ram_weights_bytes": 224284,
+      "checkpoint_bytes": 178743,
+      "stored_bytes": 112385.82723563086
+    },
+    "tail": [
+      "bitnet: eval loss 3.280 (floor ~0.89), block bpw 1.59, stored 109.8 KiB",
+      "packed: 1610 KiB -> 219 KiB in RAM, eval loss 3.280, 36.7 ms per 32x63 batch",
+      "METRICS {\"train_steps\": 60, \"train_wall_s\": 7.9733352489993194, \"train_cpu_s\": 8.232940223, \"train_cpu_util\": 1.0325591444349793, \"train_peak_extra_mib\": 132.59375, \"infer_ms_per_batch\": 36.724863299969, \"infer_cpu_ms_per_batch\": 38.481075700000034, \"infer_peak_extra_mib\": 21.93359375, \"ram_weights_bytes\": 224284, \"checkpoint_bytes\": 178743, \"stored_bytes\": 112385.82723563086}"
+    ]
+  },
+  {
+    "name": "01 train+pack, FP",
+    "cmd": [
+      "examples/01_train_and_pack.py",
+      "--linear",
+      "fp"
+    ],
+    "ok": true,
+    "wall_s": 10.351095043999521,
+    "cpu_s": 10.452773,
+    "cpu_util": 1.0098229178235032,
+    "peak_rss_mib": 894.49609375,
+    "metrics": {
+      "train_steps": 60,
+      "train_wall_s": 5.953302578000148,
+      "train_cpu_s": 6.1304172910000005,
+      "train_cpu_util": 1.029750665396105,
+      "train_peak_extra_mib": 89.16796875,
+      "infer_ms_per_batch": 19.6898921999491,
+      "infer_cpu_ms_per_batch": 20.49035640000003,
+      "infer_peak_extra_mib": 12.703125,
+      "ram_weights_bytes": 1649152,
+      "checkpoint_bytes": 1656865,
+      "stored_bytes": 824576.0
+    },
+    "tail": [
+      "fp: eval loss 3.152 (floor ~0.89), block bpw 16.00, stored 805.2 KiB",
+      "packed: 1610 KiB -> 1610 KiB in RAM, eval loss 3.152, 19.7 ms per 32x63 batch",
+      "METRICS {\"train_steps\": 60, \"train_wall_s\": 5.953302578000148, \"train_cpu_s\": 6.1304172910000005, \"train_cpu_util\": 1.029750665396105, \"train_peak_extra_mib\": 89.16796875, \"infer_ms_per_batch\": 19.6898921999491, \"infer_cpu_ms_per_batch\": 20.49035640000003, \"infer_peak_extra_mib\": 12.703125, \"ram_weights_bytes\": 1649152, \"checkpoint_bytes\": 1656865, \"stored_bytes\": 824576.0}"
+    ]
+  },
+  {
+    "name": "02 recurrent mixers",
+    "cmd": [
+      "examples/02_recurrent_mixers.py"
+    ],
+    "ok": true,
+    "wall_s": 1.541708538000421,
+    "cpu_s": 1.518111,
+    "cpu_util": 0.9846939045748383,
+    "peak_rss_mib": 640.9375,
+    "metrics": {},
+    "tail": [
+      "mingru     25,178           128  (littlebit)",
+      "",
+      "softmax attention would instead cache 2 x 128 floats per token per layer: 12,288 at T=48, growing."
+    ]
+  },
+  {
+    "name": "03 state rollback",
+    "cmd": [
+      "examples/03_state_rollback.py"
+    ],
+    "ok": true,
+    "wall_s": 1.3351759930001208,
+    "cpu_s": 1.332433,
+    "cpu_util": 0.997945594427625,
+    "peak_rss_mib": 630.1171875,
+    "metrics": {},
+    "tail": [
+      "state after rollback matches a clean run: True",
+      "state with rejected drafts differs:       True",
+      "state size: 128 floats, independent of sequence length"
+    ]
+  },
+  {
+    "name": "04 decision, LittleBit GDN",
+    "cmd": [
+      "examples/04_decision_model.py",
+      "--linear",
+      "littlebit"
+    ],
+    "ok": true,
+    "wall_s": 24.488355507999586,
+    "cpu_s": 25.048344,
+    "cpu_util": 1.0228675417513227,
+    "peak_rss_mib": 1201.66796875,
+    "metrics": {
+      "train_steps": 30,
+      "train_wall_s": 19.045041385999866,
+      "train_cpu_s": 19.737938295,
+      "train_cpu_util": 1.0363820111994866,
+      "train_peak_extra_mib": 430.28515625,
+      "infer_wall_s": 0.29177528499985783,
+      "infer_cpu_s": 0.3003634450000021,
+      "infer_cpu_util": 1.0294341585516693,
+      "infer_peak_extra_mib": 13.88671875,
+      "prefill_ms_per_state": 16.412893000051554,
+      "ms_per_question_batched": 0.6494751750011574,
+      "params": 240647,
+      "stored_bytes": 288334.0,
+      "ram_weights_bytes": 984860,
+      "checkpoint_bytes": 1026605,
+      "choice_acc": 0.21875
+    },
+    "tail": [
+      "  temps  choice 1.03  score 0.98  noul 1.02",
+      "  prefill_ms_per_state 16.41  ms_per_question_batched 0.65",
+      "METRICS {\"train_steps\": 30, \"train_wall_s\": 19.045041385999866, \"train_cpu_s\": 19.737938295, \"train_cpu_util\": 1.0363820111994866, \"train_peak_extra_mib\": 430.28515625, \"infer_wall_s\": 0.29177528499985783, \"infer_cpu_s\": 0.3003634450000021, \"infer_cpu_util\": 1.0294341585516693, \"infer_peak_extra_mib\": 13.88671875, \"prefill_ms_per_state\": 16.412893000051554, \"ms_per_question_batched\": 0.6494751750011574, \"params\": 240647, \"stored_bytes\": 288334.0, \"ram_weights_bytes\": 984860, \"checkpoint_bytes\": 1026605, \"choice_acc\": 0.21875}"
+    ]
+  },
+  {
+    "name": "04 decision, BitNet GDN",
+    "cmd": [
+      "examples/04_decision_model.py",
+      "--linear",
+      "bitnet"
+    ],
+    "ok": true,
+    "wall_s": 27.99319587699938,
+    "cpu_s": 28.666621,
+    "cpu_util": 1.0240567431442846,
+    "peak_rss_mib": 1222.8828125,
+    "metrics": {
+      "train_steps": 30,
+      "train_wall_s": 22.435482307999337,
+      "train_cpu_s": 23.290692943,
+      "train_cpu_util": 1.0381186650351502,
+      "train_peak_extra_mib": 457.73828125,
+      "infer_wall_s": 0.4318508100004692,
+      "infer_cpu_s": 0.4308681340000007,
+      "infer_cpu_util": 0.9977245011987648,
+      "infer_peak_extra_mib": 17.62109375,
+      "prefill_ms_per_state": 20.20600640007615,
+      "ms_per_question_batched": 1.0288625468746204,
+      "params": 368931,
+      "stored_bytes": 306134.79682160006,
+      "ram_weights_bytes": 1497996,
+      "checkpoint_bytes": 1495288,
+      "choice_acc": 0.25
+    },
+    "tail": [
+      "  temps  choice 1.03  score 0.98  noul 1.02",
+      "  prefill_ms_per_state 20.21  ms_per_question_batched 1.03",
+      "METRICS {\"train_steps\": 30, \"train_wall_s\": 22.435482307999337, \"train_cpu_s\": 23.290692943, \"train_cpu_util\": 1.0381186650351502, \"train_peak_extra_mib\": 457.73828125, \"infer_wall_s\": 0.4318508100004692, \"infer_cpu_s\": 0.4308681340000007, \"infer_cpu_util\": 0.9977245011987648, \"infer_peak_extra_mib\": 17.62109375, \"prefill_ms_per_state\": 20.20600640007615, \"ms_per_question_batched\": 1.0288625468746204, \"params\": 368931, \"stored_bytes\": 306134.79682160006, \"ram_weights_bytes\": 1497996, \"checkpoint_bytes\": 1495288, \"choice_acc\": 0.25}"
+    ]
+  },
+  {
+    "name": "04 decision, FP GDN",
+    "cmd": [
+      "examples/04_decision_model.py",
+      "--linear",
+      "fp"
+    ],
+    "ok": true,
+    "wall_s": 23.487620621999667,
+    "cpu_s": 24.087888,
+    "cpu_util": 1.0255567555207399,
+    "peak_rss_mib": 1189.99609375,
+    "metrics": {
+      "train_steps": 30,
+      "train_wall_s": 18.578635861000294,
+      "train_cpu_s": 19.248557878,
+      "train_cpu_util": 1.0360587301463822,
+      "train_peak_extra_mib": 424.6015625,
+      "infer_wall_s": 0.3009079599996767,
+      "infer_cpu_s": 0.30960238700000176,
+      "infer_cpu_util": 1.0288939747567143,
+      "infer_peak_extra_mib": 13.33984375,
+      "prefill_ms_per_state": 15.373334200012323,
+      "ms_per_question_batched": 0.6957648718753262,
+      "params": 368931,
+      "stored_bytes": 737862.0,
+      "ram_weights_bytes": 1497996,
+      "checkpoint_bytes": 1495288,
+      "choice_acc": 0.2578125
+    },
+    "tail": [
+      "  temps  choice 1.04  score 0.98  noul 1.02",
+      "  prefill_ms_per_state 15.37  ms_per_question_batched 0.70",
+      "METRICS {\"train_steps\": 30, \"train_wall_s\": 18.578635861000294, \"train_cpu_s\": 19.248557878, \"train_cpu_util\": 1.0360587301463822, \"train_peak_extra_mib\": 424.6015625, \"infer_wall_s\": 0.3009079599996767, \"infer_cpu_s\": 0.30960238700000176, \"infer_cpu_util\": 1.0288939747567143, \"infer_peak_extra_mib\": 13.33984375, \"prefill_ms_per_state\": 15.373334200012323, \"ms_per_question_batched\": 0.6957648718753262, \"params\": 368931, \"stored_bytes\": 737862.0, \"ram_weights_bytes\": 1497996, \"checkpoint_bytes\": 1495288, \"choice_acc\": 0.2578125}"
+    ]
+  },
+  {
+    "name": "04 decision, LittleBit Mamba2",
+    "cmd": [
+      "examples/04_decision_model.py",
+      "--mixer",
+      "mamba2"
+    ],
+    "ok": true,
+    "wall_s": 19.834324235000167,
+    "cpu_s": 20.134409,
+    "cpu_util": 1.0151295683908552,
+    "peak_rss_mib": 1143.8203125,
+    "metrics": {
+      "train_steps": 30,
+      "train_wall_s": 14.54135118999966,
+      "train_cpu_s": 15.043763826,
+      "train_cpu_util": 1.0345506156502058,
+      "train_peak_extra_mib": 372.78515625,
+      "infer_wall_s": 0.22851402200012672,
+      "infer_cpu_s": 0.23333403100000183,
+      "infer_cpu_util": 1.0210928369195325,
+      "infer_peak_extra_mib": 14.4140625,
+      "prefill_ms_per_state": 9.489057999962824,
+      "ms_per_question_batched": 0.5604314250007292,
+      "params": 281883,
+      "stored_bytes": 390966.0,
+      "ram_weights_bytes": 1149804,
+      "checkpoint_bytes": 1176839,
+      "choice_acc": 0.27734375
+    },
+    "tail": [
+      "  temps  choice 1.03  score 0.97  noul 1.02",
+      "  prefill_ms_per_state 9.49  ms_per_question_batched 0.56",
+      "METRICS {\"train_steps\": 30, \"train_wall_s\": 14.54135118999966, \"train_cpu_s\": 15.043763826, \"train_cpu_util\": 1.0345506156502058, \"train_peak_extra_mib\": 372.78515625, \"infer_wall_s\": 0.22851402200012672, \"infer_cpu_s\": 0.23333403100000183, \"infer_cpu_util\": 1.0210928369195325, \"infer_peak_extra_mib\": 14.4140625, \"prefill_ms_per_state\": 9.489057999962824, \"ms_per_question_batched\": 0.5604314250007292, \"params\": 281883, \"stored_bytes\": 390966.0, \"ram_weights_bytes\": 1149804, \"checkpoint_bytes\": 1176839, \"choice_acc\": 0.27734375}"
+    ]
+  },
+  {
+    "name": "05 pack + Helion (interpret)",
+    "cmd": [
+      "examples/05_pack_and_helion.py"
+    ],
+    "ok": true,
+    "wall_s": 16.842406906999713,
+    "cpu_s": 17.051199,
+    "cpu_util": 1.0123968084937738,
+    "peak_rss_mib": 1060.0234375,
+    "metrics": {
+      "train_steps": 60,
+      "train_wall_s": 5.886457392000011,
+      "train_cpu_s": 6.08666086,
+      "train_cpu_util": 1.0340108582578167,
+      "train_peak_extra_mib": 107.0703125,
+      "infer_torch_wall_s": 0.11303622000014002,
+      "infer_torch_cpu_s": 0.1161024219999991,
+      "infer_torch_cpu_util": 1.0271258363014553,
+      "infer_torch_peak_extra_mib": 22.51171875,
+      "infer_helion_wall_s": 6.1618692609999925,
+      "infer_helion_cpu_s": 6.295371312,
+      "infer_helion_cpu_util": 1.0216658363469306,
+      "infer_helion_peak_extra_mib": 171.79296875,
+      "ram_weights_bytes": 140000,
+      "checkpoint_bytes": 163769,
+      "stored_bytes": 103392.0
+    },
+    "tail": [
+      "  unpacked  [28, 4, 3, 11, 19, 13, 12, 21] | [8, 12, 21, 12, 12, 21, 8, 12, 21, 8, 12, 0, 20, 12, 0, 9, 13, 12, 0, 20, 2, 4, 11, 25]   (legal under the true chain: 14/48)",
+      "  torch     [28, 4, 3, 11, 19, 13, 12, 21] | [8, 12, 21, 12, 12, 21, 8, 12, 21, 8, 12, 0, 20, 12, 0, 9, 13, 12, 0, 20, 2, 4, 11, 25]   (legal under the true chain: 14/48)",
+      "  helion    [28, 4, 3, 11, 19, 13, 12, 21] | [8, 12, 21, 12, 12, 21, 8, 12, 21, 8, 12, 0, 20, 12, 0, 9, 13, 12, 0, 20, 2, 4, 11, 25]   (legal under the true chain: 14/48)"
+    ]
+  }
+]

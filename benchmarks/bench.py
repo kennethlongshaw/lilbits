@@ -3,8 +3,8 @@ size, loss, tokens seen, wall time and memory.
 
 Each config runs in its own subprocess so peak-RSS numbers don't mix.
 
-    uv run lb-bench                       # defaults: d_model 128, 2 layers, 1,500 steps
-    uv run lb-bench --device cuda --d-model 1024 --n-layers 6 --steps 5000
+    uv run python benchmarks/bench.py                       # defaults: d_model 128, 2 layers, 1,500 steps
+    uv run python benchmarks/bench.py --device cuda --d-model 1024 --n-layers 6 --steps 5000
 """
 
 from __future__ import annotations
@@ -18,11 +18,12 @@ import time
 
 import torch
 
-from .data import MarkovSource
-from .bitnet import BitLinear
-from .littlebit import LittleBitLinear
-from .model import Config, TinyLM
-from .train import TrainConfig, train
+from littlebit_scratch.data import MarkovSource
+from littlebit_scratch.bitnet import BitLinear
+from littlebit_scratch.littlebit import LittleBitLinear
+from littlebit_scratch.measure import size_report
+from littlebit_scratch.model import Config, TinyLM
+from littlebit_scratch.train import TrainConfig, train
 
 CONFIGS = {
     "fp": dict(linear="fp", optim="adamw", fp_warmup=0, init="small", itq_iters=0,
@@ -41,34 +42,6 @@ def _rss_mib() -> float:
 
 def _bytes(params) -> int:
     return sum(p.numel() * p.element_size() for p in params)
-
-
-def size_report(model: TinyLM) -> dict:
-    """Training-time tensors (FP32) and deployed size (FP16 for FP parts, packed bits for LittleBit / BitNet)."""
-    lb_params, lb_bits, lb_dense = set(), 0, 0
-    fp_lin_params, fp_lin_dense = set(), 0
-    for name, m in model.named_modules():
-        if isinstance(m, (LittleBitLinear, BitLinear)):
-            lb_params |= {id(p) for p in m.parameters()}
-            lb_bits += m.storage_bits()
-            lb_dense += m.in_features * m.out_features
-        elif isinstance(m, torch.nn.Linear) and name.startswith("blocks."):
-            fp_lin_params.add(id(m.weight))
-            fp_lin_dense += m.weight.numel()
-    block_ids = lb_params | fp_lin_params
-    other = [p for p in model.parameters() if id(p) not in block_ids]
-    n_params = sum(p.numel() for p in model.parameters())
-    block_deployed_bits = lb_bits + 16 * fp_lin_dense
-    other_deployed_bits = 16 * sum(p.numel() for p in other)
-    return {
-        "trainable_params": n_params,
-        "block_linear_weights": lb_dense + fp_lin_dense,
-        "train_param_bytes": _bytes(model.parameters()),
-        "deployed_block_bytes": block_deployed_bits / 8,
-        "deployed_other_bytes": other_deployed_bits / 8,
-        "deployed_total_bytes": (block_deployed_bits + other_deployed_bits) / 8,
-        "block_bpw": block_deployed_bits / max(1, lb_dense + fp_lin_dense),
-    }
 
 
 OPTIMS = {
@@ -104,7 +77,7 @@ def run_one(spec: str, args) -> dict:
     model = res["model"].eval()
     sizes = size_report(model)
     # AdamW keeps exp_avg + exp_avg_sq (2x params); Muon keeps one momentum buffer for its 2D block matrices
-    from .train import param_groups
+    from littlebit_scratch.train import param_groups
     groups = param_groups(model, 1.0, 1.0, 0.0)
     muon_bytes = sum(_bytes(g["params"]) for g in groups if g["name"] in ("hidden", "latent"))
     opt_state_bytes = (2 * sizes["train_param_bytes"] if o["optim"] == "adamw"
@@ -183,7 +156,7 @@ def main(argv=None):
         return
     passthrough = [a for a in (argv if argv is not None else sys.argv[1:])]
     keys = args.configs.split(",")
-    cmds = [[sys.executable, "-m", "littlebit_scratch.bench", *passthrough, "--one", k] for k in keys]
+    cmds = [[sys.executable, __file__, *passthrough, "--one", k] for k in keys]
     if args.parallel:
         procs = [subprocess.Popen(c, stdout=subprocess.PIPE, text=True) for c in cmds]
         outs = [p.communicate()[0] for p in procs]
