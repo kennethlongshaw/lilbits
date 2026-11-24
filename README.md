@@ -257,8 +257,8 @@ call re-binarized the latents and rebuilt the factors, which is what made Little
 
 Full CPU output (4 threads): `results/infer_bench_cpu.md`. Highlights:
 
-- TinyLM (d_model 128), batch 32×64: FP 8.95 ms; LittleBit 1.41 bpw 16.6 → 9.5 ms; 1.0 bpw 11.2 → 7.7 ms.
-  Single-token: FP 0.29 ms; LittleBit 3.6 → 0.34 ms. At width 128 and ~1.4 bpw the rank is close to
+- TinyLM (d_model 128), batch 32×64: FP 8.6 ms; LittleBit 1.41 bpw 15.5 → 9.1 ms; 1.0 bpw 11.1 → 8.7 ms.
+  Single-token: FP 0.28 ms; LittleBit 1.41 bpw 3.6 → 0.30 ms. At width 128 and ~1.4 bpw the rank is close to
   break-even, so parity is the best possible.
 - Single layers at real widths: speed tracks MACs. ~1 bpw ≈ dense rank, so ≈1× speed; 0.55 bpw ≈ 1.7-2.7×;
   0.1 bpw ≈ 7-21× (4096×4096: 0.83 → 0.039 ms per token, 116 → 14 ms for 2,048 tokens).
