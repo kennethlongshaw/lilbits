@@ -57,7 +57,7 @@ def unpack_signs(packed: torch.Tensor, r: int, dtype=torch.float32) -> torch.Ten
 def set_scales(m: nn.Module, h: torch.Tensor, g: torch.Tensor, l: torch.Tensor, scale_bits: int) -> None:
     """Store (P, n) scale stacks on a packed layer. FP16: buffers h, g, l. INT8: persistent h_q / h_s ... buffers,
     and h, g, l as non-persistent FP16 dequantized copies that compute paths read (rebuilt after load_state_dict)."""
-    m.scale_bits = scale_bits
+    m.__dict__["scale_bits"] = scale_bits
     if scale_bits >= 16:
         for n, t in (("h", h), ("g", g), ("l", l)):
             m.register_buffer(n, t.detach().half().clone())
@@ -69,7 +69,7 @@ def set_scales(m: nn.Module, h: torch.Tensor, g: torch.Tensor, l: torch.Tensor, 
     refresh_scales(m)
     if not getattr(m, "_scale_hook", False):
         m.register_load_state_dict_post_hook(lambda mod, _keys: refresh_scales(mod))
-        m._scale_hook = True
+        m.__dict__["_scale_hook"] = True
 
 
 def refresh_scales(m: nn.Module) -> None:
