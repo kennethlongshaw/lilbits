@@ -1,0 +1,18 @@
+1) training LittleBit (1.41 bpw) for 800 steps (200 FP warm start)...
+   done in 34s, eval loss 1.1166
+2) packing: 1-bit signs (uint8), FP16 scales, FP32 latents dropped
+
+3) inference on held-out sequences
+
+| model | held-out loss (floor 0.890) | max logit diff vs unpacked | greedy generation identical | weights in RAM | time |
+|---|---|---|---|---|---|
+| trained, unpacked (FP32 latents) | 1.0982 | 0.00e+00 | yes | 1,603 KiB |  |
+| packed, torch backend | 1.0982 | 1.16e-02 | yes | 137 KiB | 0.1s |
+| packed, helion backend | 1.0982 | 1.16e-02 | yes | 137 KiB | 5.2s |
+
+packed checkpoint on disk: 160 KiB
+
+greedy continuation of the first prompt (prompt | generated):
+  unpacked  [4, 21, 4, 11, 25, 7, 12, 5] | [19, 28, 20, 10, 8, 29, 4, 24, 9, 30, 1, 25, 15, 3, 30, 10, 7, 25, 2, 23, 21, 19, 28, 20]   (legal under the true chain: 48/48)
+  torch     [4, 21, 4, 11, 25, 7, 12, 5] | [19, 28, 20, 10, 8, 29, 4, 24, 9, 30, 1, 25, 15, 3, 30, 10, 7, 25, 2, 23, 21, 19, 28, 20]   (legal under the true chain: 48/48)
+  helion    [4, 21, 4, 11, 25, 7, 12, 5] | [19, 28, 20, 10, 8, 29, 4, 24, 9, 30, 1, 25, 15, 3, 30, 10, 7, 25, 2, 23, 21, 19, 28, 20]   (legal under the true chain: 48/48)

@@ -15,6 +15,7 @@ lb-bench = "littlebit_scratch.bench:main"
 lb-infer-bench = "littlebit_scratch.infer_bench:main"
 lb-mem-bench = "littlebit_scratch.mem_bench:main"
 lb-gpu-bench = "littlebit_scratch.gpu_bench:main"
+lb-demo-infer = "littlebit_scratch.demo_infer:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

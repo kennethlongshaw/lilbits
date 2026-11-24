@@ -318,6 +318,11 @@ uv run lb-gpu-bench                  # FP16 nn.Linear vs packed torch vs packed 
 On first use per shape Helion picks the fastest of 4 candidate configs per kernel; `LB_HELION_AUTOTUNE=1`
 runs Helion's full autotuner instead (~minutes per shape; it prints a config you can hardcode).
 
+End-to-end CPU demo (`HELION_INTERPRET=1 uv run --extra gpu lb-demo-infer`): trains a LittleBit TinyLM,
+packs it, then runs held-out eval and greedy generation through the unpacked model, the packed torch backend
+and the packed Helion kernels. All three give the same held-out loss and identical generations; output in
+`results/demo_infer_cpu_helion_interpret.txt`.
+
 **Status: not yet run on a GPU** (this was built in a CPU-only sandbox). What's verified: Triton code
 generates for every candidate config, and in Helion's eager reference mode on CPU (`HELION_INTERPRET=1`)
 the kernels match the PyTorch packed layer to ~1e-6, for single layers and a whole packed TinyLM
@@ -335,6 +340,7 @@ operands instead of FP32 (±1 is exact in FP16), and fuse the two residual paths
 - `src/littlebit_scratch/packed.py`: bit-packed inference export
 - `src/littlebit_scratch/mem_bench.py`: `lb-mem-bench`, inference memory/speed of FP vs cached vs packed
 - `src/littlebit_scratch/helion_kernels.py`: Helion kernels for packed inference
+- `src/littlebit_scratch/demo_infer.py`: `lb-demo-infer`, train → pack → inference with torch / Helion backends
 - `src/littlebit_scratch/gpu_bench.py`: `lb-gpu-bench`, GPU speed of dense vs packed torch vs packed Helion
 - `src/littlebit_scratch/bench.py`: `lb-bench`, FP vs LittleBit size/loss/time/memory comparison
 - `results/`: logs from the comparison runs above
