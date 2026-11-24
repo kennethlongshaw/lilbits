@@ -11,6 +11,7 @@ testable on its own and has a dense FP reference.
 | Compressed linears | LittleBit low-rank binarized linear (residual paths, STE, SVD+ITQ init) | ✅ | `layers/littlebit.py` |
 | | BitNet b1.58 ternary linear (absmean weights, 8-bit activations) | ✅ | `layers/bitnet.py` |
 | | Bit-packed export: 1-bit signs (LittleBit), 2-bit codes (BitNet) | ✅ | `inference/packed.py`, `layers/bitnet.py` |
+| | Lookup-table (T-MAC style) CPU kernels for packed LittleBit and BitNet decode: AVX-512 / AVX2 / scalar, fused scales | ✅ 5–35× faster than FP32 dense at 1 token | `inference/lut.py`, `inference/lut_kernel.c`, `benchmarks/lut_bench.py` |
 | | Helion kernels for packed LittleBit | ✅ interpret mode only, GPU speed unmeasured | `inference/helion_kernels.py` |
 | | Cheaper scales (INT8 h/g), uneven bpw allocation per layer type | ⬜ | |
 | Prelude / core mixer | Gated DeltaNet (fixed-size state, FP gates option) | ✅ naive per-token loop | `mixers/recurrent.py` |

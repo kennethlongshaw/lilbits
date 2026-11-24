@@ -6,7 +6,7 @@ The repo collects interchangeable building blocks, each with tests and a dense F
 
 - **Compressed linears:** LittleBit sub-1-bit low-rank binarized layers, and BitNet b1.58 ternary layers.
 - **Token mixers:** softmax attention, and recurrent mixers with fixed-size state: Gated DeltaNet, Mamba2, GLA (RWKV-6 style), xLSTM mLSTM and minGRU.
-- **Packing and inference:** 1-bit and 2-bit packed weights, inference caches, and Helion kernels.
+- **Packing and inference:** 1-bit and 2-bit packed weights, inference caches, lookup-table (T-MAC style) CPU kernels for fast packed decode, and Helion kernels.
 - **Decision-model parts (Jev-style):** a state prefilled once, forks per question, and a typed Choice / Score / Noul readout with calibration metrics.
 - **Model assemblies:** a looped recurrent-depth LM (Huginn / Ouro), byte-level models with dynamic patching (BLT, H-Net), and LLM-JEPA training with an EMA target.
 - **Training:** a Lightning Fabric loop, Muon and DeepSeek-style Muon, FP warm start → LittleBit conversion, and Optuna sweeps.
@@ -225,7 +225,7 @@ and lists what is still missing. Runnable demos are in `examples/`.
 | token mixer | `softmax`, `gdn` (Gated DeltaNet), `mamba2` (SSD), `gla` (GLA / RWKV-6 style), `mlstm` (xLSTM), `mingru` | `models/tinylm.py`, `mixers/recurrent.py` |
 | model assemblies | `TinyLM`; recurrent-depth looped LM (Huginn, Ouro exit gate); byte-level BLT and H-Net; decision-model parts | `models/` |
 | data | Markov source with known floor, char-level text, raw bytes (`ByteSource`) | `data.py` |
-| packing | 1-bit signs + FP16 scales (LittleBit), 2-bit ternary codes (BitNet), Helion kernels | `inference/packed.py`, `layers/bitnet.py`, `inference/helion_kernels.py` |
+| packing | 1-bit signs + FP16 scales (LittleBit), 2-bit ternary codes (BitNet), LUT CPU kernels, Helion kernels | `inference/packed.py`, `layers/bitnet.py`, `inference/lut.py`, `inference/helion_kernels.py` |
 | optimizer | AdamW, torch Muon, DeepSeek-style Muon | `training/optim.py`, `train.py` |
 
 Every recurrent mixer is a plain per-token loop with `initial_state` in and the final state out, so state
@@ -428,9 +428,61 @@ RSS above the pre-forward level during the timed forwards.
 | 4096×4096, LittleBit 0.1 bpw, **packed** | **208 KiB** | **211 KiB** | 3.10 ms / 9.7 MiB (1 token) | 56.86 ms / 41.6 MiB (2048 tokens) |
 
 Packing delivers the memory the bpw numbers promise (4096×4096 at 1 bpw: 64 MiB FP32 → 2 MiB; whole TinyLM
-1.6 MiB → 0.13 MiB). Without a fused kernel every call unpacks all signs, so single-token decode is ~13× slower
+1.6 MiB → 0.13 MiB). `PackedLittleBitLinear` unpacks all signs on every call, so single-token decode is ~13× slower
 than dense at 1 bpw and about even at 0.1 bpw; with many tokens the unpack amortizes (0.55 bpw 1.8× and
-0.1 bpw 7× faster than dense for 2,048 tokens).
+0.1 bpw 7× faster than dense for 2,048 tokens). The lookup-table kernels below remove the decode slowdown.
+
+### Lookup-table kernels (T-MAC style, `inference/lut.py`, `uv run python benchmarks/lut_bench.py`)
+
+`pack_lut(model)` swaps LittleBit and BitNet linears (latent or already packed) for LUT layers that never
+unpack. For each group of 4 inputs the kernel builds the 16 possible signed sums once per token, and then every
+output is one table lookup per group instead of 4 multiply-adds (T-MAC; bitnet.cpp's TL kernels). With AVX-512 a
+group's table is one register, and one `vpermps` does 16 lookups at once; AVX2 and scalar paths exist too. The C
+kernel (`inference/lut_kernel.c`) is compiled on first use with the system compiler and loaded with ctypes, and a
+pure-torch reference is used if no compiler is found.
+
+- LittleBit: two sign passes per path (`S_V^T` then `S_U`), with the g, l, h scales and the path sum fused into
+  one C call. Weights stay at 1 bit per sign.
+- BitNet b1.58: ternary is written as two sign planes, W = (P + Q) / 2, which share the same tables. That is
+  2 bits per weight, the same as bitnet.cpp's I2_S layout. Activations are the int8-quantized values, as in training.
+- Prefill: above 8 tokens per call (`max_lut_tokens`) the layer unpacks once and runs a dense FP32 matmul.
+
+Decode through the linears of 4 BitNet-2B4T-shaped blocks (q, k, v, o, gate, up, down at d 2560, FFN 6912, about
+1 GiB of FP32 weights, so dense runs from DRAM). Same CPU (4 cores, AVX-512), one token per call:
+
+| variant | weight RAM | 1 thread | 4 threads | est. tok/s for 30 layers of linears, 4 threads | peak RSS growth |
+|---|---|---|---|---|---|
+| fp32 dense | 1,060 MiB | 68.9 ms | 27.3 ms | 5 | 0.0 MiB |
+| bf16 dense | 530 MiB | 51.7 ms | 17.7 ms | 8 | 0.6 MiB |
+| LittleBit 1.0 bpw unpack | 33 MiB | 641.4 ms | 207.3 ms | 1 | 25.5 MiB |
+| LittleBit 1.0 bpw LUT | 33 MiB | 4.0 ms | 2.4 ms | 56 | 1.7 MiB |
+| LittleBit 0.55 bpw LUT | 18 MiB | 2.4 ms | 2.0 ms | 67 | 1.6 MiB |
+| BitNet b1.58 unpack | 66 MiB | 1017.5 ms | 339.7 ms | 0 | 222.0 MiB |
+| BitNet b1.58 LUT | 66 MiB | 13.3 ms | 4.7 ms | 28 | 0.2 MiB |
+| BitNet b1.58 dense ternary (cached fp32) | 2,120 MiB | 85.1 ms | 33.1 ms | 4 | 0.1 MiB |
+
+Single 4096×4096 layer, 1 thread, ms per call by tokens per call:
+
+| variant | 1 token | 4 tokens | 16 tokens |
+|---|---|---|---|
+| fp32 dense | 3.50 | 7.38 | 10.70 |
+| bf16 dense | 1.93 | 2.59 | 2.32 |
+| LittleBit 1.0 bpw unpack | 42.54 | 43.34 | 38.65 |
+| LittleBit 1.0 bpw LUT | 0.28 | 0.84 | 2.33 |
+| LittleBit 0.55 bpw LUT | 0.10 | 0.39 | 1.27 |
+| BitNet b1.58 unpack | 85.65 | 98.72 | 91.82 |
+| BitNet b1.58 LUT | 0.47 | 1.73 | 4.49 |
+
+What this shows:
+- The ~13× decode slowdown is gone. At 1 token and 1 thread the LUT layers are 5–35× faster than FP32 dense and 4–22× faster
+  than BF16 dense, while using 1/32 (LittleBit 1 bpw) or 1/16 (BitNet) of the FP32 weight memory.
+- The advantage shrinks as tokens per call grow, since a table is rebuilt per token and dense BLAS reuses each weight
+  across tokens. At 16 tokens BF16 dense is faster, which is why prefill falls back to a dense matmul.
+- These are kernel timings with random weights. A LittleBit layer at 1 bpw is a low-rank approximation and does
+  not have the quality of a BitNet layer at 2 bits (see the matched-size results above). Numbers come from one
+  cloud VM with a large L3 cache; single-layer FP32 numbers benefit from that cache, the 4-block test does not.
+- Not done yet: the T-MAC int8 table quantization and mirror-table tricks, and a real decode loop with a KV cache or
+  recurrent state (TinyLM recomputes the whole prefix, so its `generate` hits the prefill path).
 
 ### Helion kernel (`backend="helion"`, `uv run python benchmarks/gpu_bench.py`)
 

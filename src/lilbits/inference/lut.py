@@ -1,0 +1,326 @@
+"""Lookup-table (T-MAC style) CPU kernels for packed LittleBit and BitNet decode.
+
+Packed layers in `packed.py` unpack every sign before each matmul, so single-token decode pays for the full
+unpack and ends up slower than a dense FP matmul. A lookup-table kernel never unpacks. It groups 4 inputs,
+builds each group's 16 possible signed sums once per token, and then computes every output as one table lookup
+per group (T-MAC, Wei et al. 2024; bitnet.cpp's TL kernels, Wang et al. 2025). The weights stay at 1 bit
+(LittleBit signs) or 2 bits (BitNet ternary) in memory the whole time.
+
+    y = S x,  S in {-1,+1}^(out x in):   T_g[c] = sum_j (+-x)[4g+j],   y_o = sum_g T_g[code(o, g)]
+
+LittleBit:  y = sum_paths h * (S_U (l * (S_V^T (g * x))))  -> two sign LUT matmuls per path.
+BitNet:     W in {-1,0,+1} is written as (P + Q) / 2 with P, Q in {-1,+1} (+1 = (+1,+1), -1 = (-1,-1),
+            0 = (+1,-1)), so W x = (P x + Q x) / 2: two sign LUT matmuls that share the same tables.
+            2 bits per weight, the same as bitnet.cpp's I2_S layout. Activations are absmax int8-quantized
+            values, as in training.
+
+The C kernel (`lut_kernel.c`) is compiled on first use with the system C compiler (-O3 -march=native -fopenmp)
+and loaded with ctypes. AVX-512 and AVX2 paths use in-register table lookups (vpermps); other CPUs use a scalar
+loop. Without a compiler, `lut_matmul` falls back to a pure-torch reference (correct but slow).
+
+Use `pack_lut(model)` to swap LittleBitLinear / PackedLittleBitLinear / BitLinear / PackedBitLinear for LUT layers.
+The kernel is for decode (few tokens). For more than `max_lut_tokens` rows, the layer unpacks once and runs a
+dense matmul instead, which is faster for prefill.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import hashlib
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+import torch
+import torch.nn.functional as F
+from torch import nn
+
+from lilbits.inference.packed import PackedLittleBitLinear, unpack_signs
+from lilbits.layers.bitnet import BitLinear, PackedBitLinear, act_quant
+from lilbits.layers.littlebit import LittleBitLinear
+
+_SRC = Path(__file__).with_name("lut_kernel.c")
+_lib: ctypes.CDLL | None = None
+_lib_error: str | None = None
+
+
+def _cache_dir() -> Path:
+    return Path(os.environ.get("LILBITS_CACHE", Path.home() / ".cache" / "lilbits"))
+
+
+def _load() -> ctypes.CDLL | None:
+    """Compile (once, cached by source hash) and load the kernel. None if no C compiler is available."""
+    global _lib, _lib_error
+    if _lib is not None or _lib_error is not None:
+        return _lib
+    src = _SRC.read_bytes()
+    flags = ["-O3", "-march=native", "-fopenmp", "-shared", "-fPIC", "-std=c11"]
+    key = hashlib.sha256(src + " ".join(flags).encode()).hexdigest()[:16]
+    so = _cache_dir() / f"lut_kernel_{key}.so"
+    try:
+        if not so.exists():
+            cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+            if cc is None:
+                raise RuntimeError("no C compiler found (set CC)")
+            so.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / so.name
+                subprocess.run([cc, *flags, str(_SRC), "-o", str(out)], check=True, capture_output=True)
+                shutil.move(str(out), so)
+        lib = ctypes.CDLL(str(so))
+    except (RuntimeError, OSError, subprocess.CalledProcessError) as e:
+        _lib_error = getattr(e, "stderr", None) or str(e)
+        return None
+    i64, ptr = ctypes.c_int64, ctypes.c_void_p
+    lib.lut_matmul.argtypes = [ptr, ptr, ptr, ptr, i64, i64, i64, i64, ctypes.c_int]
+    lib.lut_matmul_scalar.argtypes = [ptr, ptr, ptr, ptr, i64, i64, i64, i64]
+    lib.lut_ternary.argtypes = [ptr, ptr, ptr, ptr, ptr, i64, i64, i64, i64, ctypes.c_float, ctypes.c_int]
+    lib.lut_littlebit.argtypes = [ptr] * 12 + [i64] * 9 + [ctypes.c_int]
+    lib.lut_simd_width.restype = ctypes.c_int
+    _lib = lib
+    return lib
+
+
+def kernel_info() -> dict:
+    lib = _load()
+    if lib is None:
+        return {"compiled": False, "error": _lib_error, "simd": 0}
+    return {"compiled": True, "simd": int(lib.lut_simd_width())}
+
+
+def pack_sign_codes(S: torch.Tensor) -> torch.Tensor:
+    """(out, in) real -> (ceil(out/32), ceil(in/4), 16) uint8 LUT codes of sign(S) (>= 0 -> +1).
+
+    Inputs are padded to a multiple of 4 (padding signs are +1, and padded x is 0, so they add nothing) and
+    outputs to a multiple of 32 (padded rows are dropped after the kernel).
+    """
+    O, I = S.shape
+    bits = (S >= 0).to(torch.uint8)
+    bits = F.pad(bits, (0, (-I) % 4, 0, (-O) % 32), value=1)
+    Op, Ip = bits.shape
+    nib = (bits.view(Op, Ip // 4, 4) << torch.arange(4, dtype=torch.uint8)).sum(-1, dtype=torch.uint8)  # Op, G
+    nib = nib.view(Op // 32, 2, 16, Ip // 4).permute(0, 3, 2, 1)  # OB, G, 16 (k), 2 (low / high half)
+    return (nib[..., 0] | (nib[..., 1] << 4)).contiguous()
+
+
+def unpack_sign_codes(codes: torch.Tensor, out_features: int, in_features: int) -> torch.Tensor:
+    """Inverse of pack_sign_codes: (out, in) of +-1 float32."""
+    OB, G, _ = codes.shape
+    nib = torch.stack([codes & 15, codes >> 4], -1).permute(0, 3, 2, 1).reshape(OB * 32, G)  # Op, G
+    bits = (nib.unsqueeze(-1) >> torch.arange(4, dtype=torch.uint8)) & 1  # Op, G, 4
+    return (bits.reshape(OB * 32, G * 4).float() * 2 - 1)[:out_features, :in_features]
+
+
+def lut_matmul_ref(x: torch.Tensor, codes: torch.Tensor, out_features: int) -> torch.Tensor:
+    """Pure-torch reference of the kernel: same tables and lookups, vectorized with gather."""
+    N, I = x.shape
+    OB, G, _ = codes.shape
+    xp = F.pad(x.float(), (0, 4 * G - I)).view(N, G, 4)
+    c = torch.arange(16)
+    signs = ((c[:, None] >> torch.arange(4)) & 1).float() * 2 - 1  # 16, 4
+    T = xp @ signs.t()  # N, G, 16
+    idx = torch.stack([codes & 15, codes >> 4], -1).permute(0, 3, 2, 1).reshape(OB * 32, G).long()  # Op, G
+    y = T.gather(2, idx.t().unsqueeze(0).expand(N, G, OB * 32)).sum(1)  # N, Op
+    return y[:, :out_features]
+
+
+def lut_matmul(
+    x: torch.Tensor, codes: torch.Tensor, out_features: int, threads: int | None = None, scalar: bool = False
+) -> torch.Tensor:
+    """y = x @ S^T for the +-1 matrix S encoded in `codes`. x: (N, in) -> (N, out) float32."""
+    lib = _load()
+    if lib is None or x.device.type != "cpu":
+        return lut_matmul_ref(x, codes, out_features)
+    N, I = x.shape
+    OB, G, _ = codes.shape
+    xp = x.float().contiguous()
+    if 4 * G != I:
+        xp = F.pad(xp, (0, 4 * G - I))
+    y = torch.empty(N, out_features, dtype=torch.float32)
+    tables = torch.empty(N, G, 16, dtype=torch.float32)
+    if scalar:
+        lib.lut_matmul_scalar(xp.data_ptr(), codes.data_ptr(), tables.data_ptr(), y.data_ptr(), N, G, OB, out_features)
+    else:
+        nt = threads or torch.get_num_threads()
+        lib.lut_matmul(xp.data_ptr(), codes.data_ptr(), tables.data_ptr(), y.data_ptr(), N, G, OB, out_features, nt)
+    return y
+
+
+def _f32(m: nn.Module, *names: str) -> list[torch.Tensor]:
+    """FP32 copies of FP16 scale buffers, cached on the module (not saved; recomputed after load)."""
+    cache = m.__dict__.setdefault("_f32", {})
+    out = []
+    for n in names:
+        b = getattr(m, n)
+        if n not in cache or cache[n][0] is not b:
+            cache[n] = (b, None if b is None else b.float().contiguous())
+        out.append(cache[n][1])
+    return out
+
+
+def _ptr(t: torch.Tensor | None) -> int | None:
+    return None if t is None else t.data_ptr()
+
+
+def _sign(t: torch.Tensor) -> torch.Tensor:
+    return torch.where(t >= 0, 1.0, -1.0)
+
+
+class LUTLittleBitLinear(nn.Module):
+    """Inference-only LittleBit layer on the LUT kernel. Same 1-bit storage as PackedLittleBitLinear."""
+
+    V_codes: torch.Tensor  # P, ceil(r/32), ceil(in/4), 16: S_V^T, (r x in)
+    U_codes: torch.Tensor  # P, ceil(out/32), ceil(r/4), 16: S_U, (out x r)
+    h: torch.Tensor
+    g: torch.Tensor
+    l: torch.Tensor
+    bias: torch.Tensor | None
+
+    def __init__(self, layer: LittleBitLinear | PackedLittleBitLinear, max_lut_tokens: int = 8):
+        super().__init__()
+        self.in_features, self.out_features, self.rank = layer.in_features, layer.out_features, layer.rank
+        self.max_lut_tokens = max_lut_tokens
+        with torch.no_grad():
+            if isinstance(layer, LittleBitLinear):
+                paths = list(layer.paths)
+                Us = [_sign(p.U) for p in paths]
+                Vs = [_sign(p.V) for p in paths]
+                h, g, l = (torch.stack([getattr(p, k) for p in paths]).half() for k in "hgl")
+                bias = layer.bias
+            else:
+                P, r = layer.paths, layer.rank
+                Us = [unpack_signs(layer.U_bits[i], r) for i in range(P)]
+                Vs = [unpack_signs(layer.V_bits[i], r) for i in range(P)]
+                h, g, l, bias = layer.h, layer.g, layer.l, layer.bias
+            self.register_buffer("V_codes", torch.stack([pack_sign_codes(V.t()) for V in Vs]))
+            self.register_buffer("U_codes", torch.stack([pack_sign_codes(U) for U in Us]))
+            self.register_buffer("h", h.half().clone())
+            self.register_buffer("g", g.half().clone())
+            self.register_buffer("l", l.half().clone())
+            self.register_buffer("bias", None if bias is None else bias.detach().half().clone())
+
+    @property
+    def paths(self) -> int:
+        return self.U_codes.shape[0]
+
+    def weight(self) -> torch.Tensor:
+        """Dense effective weight (prefill path and tests)."""
+        W = torch.zeros(self.out_features, self.in_features)
+        for i in range(self.paths):
+            Su = unpack_sign_codes(self.U_codes[i], self.out_features, self.rank)
+            Sv = unpack_sign_codes(self.V_codes[i], self.rank, self.in_features)
+            W += self.h[i].float()[:, None] * ((Su * self.l[i].float()) @ Sv) * self.g[i].float()[None, :]
+        return W
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        lead, dt = x.shape[:-1], x.dtype
+        x2 = x.reshape(-1, self.in_features).float()
+        if x2.shape[0] > self.max_lut_tokens:  # prefill: one unpack, then a dense matmul
+            cache = self.__dict__.get("_dense")
+            if cache is None:
+                cache = self.__dict__["_dense"] = self.weight()
+            y = x2 @ cache.t()
+        elif (lib := _load()) is not None and x2.device.type == "cpu":
+            g, l, h, bias = _f32(self, "g", "l", "h", "bias")
+            x2 = x2.contiguous()
+            N, (P, OBr, Gi, _), (_, OBo, Gr, _) = x2.shape[0], self.V_codes.shape, self.U_codes.shape
+            xs, ti = torch.empty(4 * Gi), torch.empty(Gi * 16)
+            t, tr = torch.empty(4 * Gr), torch.empty(Gr * 16)
+            y = torch.empty(N, self.out_features)
+            lib.lut_littlebit(
+                *(_ptr(v) for v in (x2, self.V_codes, self.U_codes, g, l, h, bias, xs, ti, t, tr, y)),
+                *(N, P, self.in_features, Gi, OBr, self.rank, Gr, OBo, self.out_features),
+                torch.get_num_threads(),
+            )
+            return y.to(dt).view(*lead, self.out_features)
+        else:
+            y = torch.zeros(x2.shape[0], self.out_features)
+            for i in range(self.paths):
+                t = lut_matmul(x2 * self.g[i].float(), self.V_codes[i], self.rank)
+                y += lut_matmul(t * self.l[i].float(), self.U_codes[i], self.out_features) * self.h[i].float()
+        if self.bias is not None:
+            y += self.bias.float()
+        return y.to(dt).view(*lead, self.out_features)
+
+    def storage_bytes(self) -> int:
+        return sum(b.numel() * b.element_size() for b in self.buffers())
+
+
+class LUTBitLinear(nn.Module):
+    """Inference-only BitNet b1.58 layer on the LUT kernel: ternary as two sign planes, 2 bits per weight."""
+
+    P_codes: torch.Tensor
+    Q_codes: torch.Tensor
+    scale: torch.Tensor
+    bias: torch.Tensor | None
+
+    def __init__(self, layer: BitLinear | PackedBitLinear, max_lut_tokens: int = 8):
+        super().__init__()
+        self.in_features, self.out_features = layer.in_features, layer.out_features
+        self.act_bits, self.norm, self.max_lut_tokens = layer.act_bits, layer.norm, max_lut_tokens
+        with torch.no_grad():
+            if isinstance(layer, PackedBitLinear):
+                scale = layer.scale.float()
+                q = (layer.weight() / scale).round()
+            else:
+                w = layer.weight.detach()
+                scale = w.abs().mean().clamp(min=1e-5)
+                q = (w / scale).round().clamp(-1, 1)
+            # +1 -> (+1, +1), -1 -> (-1, -1), 0 -> (+1, -1)
+            self.register_buffer("P_codes", pack_sign_codes(torch.where(q >= 0, 1.0, -1.0)))
+            self.register_buffer("Q_codes", pack_sign_codes(torch.where(q > 0, 1.0, -1.0)))
+            self.register_buffer("scale", scale.half())
+            self.register_buffer("bias", None if layer.bias is None else layer.bias.detach().half().clone())
+
+    def weight(self) -> torch.Tensor:
+        P = unpack_sign_codes(self.P_codes, self.out_features, self.in_features)
+        Q = unpack_sign_codes(self.Q_codes, self.out_features, self.in_features)
+        return (P + Q) * (0.5 * self.scale.float())
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        lead, dt = x.shape[:-1], x.dtype
+        x2 = x.reshape(-1, self.in_features).float()
+        x2 = F.rms_norm(x2, (self.in_features,)) if self.norm else x2
+        x2 = act_quant(x2, self.act_bits) if self.act_bits else x2
+        if x2.shape[0] > self.max_lut_tokens:
+            cache = self.__dict__.get("_dense")
+            if cache is None:
+                cache = self.__dict__["_dense"] = self.weight()
+            y = x2 @ cache.t()
+        elif (lib := _load()) is not None and x2.device.type == "cpu":
+            x2 = x2.contiguous()
+            OB, G, _ = self.P_codes.shape
+            if 4 * G != self.in_features:
+                x2 = F.pad(x2, (0, 4 * G - self.in_features))
+            y = torch.empty(x2.shape[0], self.out_features)
+            tables = torch.empty(x2.shape[0], G, 16)
+            lib.lut_ternary(
+                *(_ptr(v) for v in (x2, self.P_codes, self.Q_codes, tables, y)),
+                *(x2.shape[0], G, OB, self.out_features),
+                float(self.scale),
+                torch.get_num_threads(),
+            )
+        else:
+            P = lut_matmul(x2, self.P_codes, self.out_features)
+            y = (P + lut_matmul(x2, self.Q_codes, self.out_features)) * (0.5 * self.scale.float())
+        if self.bias is not None:
+            y += self.bias.float()
+        return y.to(dt).view(*lead, self.out_features)
+
+    def storage_bytes(self) -> int:
+        return sum(b.numel() * b.element_size() for b in self.buffers())
+
+
+@torch.no_grad()
+def pack_lut(model: nn.Module, max_lut_tokens: int = 8) -> nn.Module:
+    """In place: LittleBit / BitNet linears (latent or packed) -> LUT layers. Returns the model in eval mode."""
+    for name, child in list(model.named_children()):
+        if isinstance(child, (LittleBitLinear, PackedLittleBitLinear)):
+            setattr(model, name, LUTLittleBitLinear(child, max_lut_tokens))
+        elif isinstance(child, (BitLinear, PackedBitLinear)):
+            setattr(model, name, LUTBitLinear(child, max_lut_tokens))
+        else:
+            pack_lut(child, max_lut_tokens)
+    return model.eval()
