@@ -1,10 +1,24 @@
-# littlebit-scratch
+# lilbits
 
-A small PyTorch prototype of **LittleBit-style sub-1-bit linear layers** inside a transformer block,
-trained **from scratch** (no pretrained teacher, no distillation), with bit-packed inference and a Helion kernel.
+**A PyTorch toolkit of primitives for small, lean AI models**: models that are cheap to train *and* to run.
 
-Reference: Lee et al., *LittleBit: Ultra Low-Bit Quantization via Latent Factorization*
-(NeurIPS 2025, arXiv:2506.13771) and LittleBit-2 (arXiv:2603.00042).
+The repo collects interchangeable building blocks, each with tests and a dense FP reference:
+
+- **Compressed linears:** LittleBit sub-1-bit low-rank binarized layers, and BitNet b1.58 ternary layers.
+- **Token mixers:** softmax attention, and recurrent mixers with fixed-size state: Gated DeltaNet, Mamba2, GLA (RWKV-6 style), xLSTM mLSTM and minGRU.
+- **Packing and inference:** 1-bit and 2-bit packed weights, inference caches, and Helion kernels.
+- **Decision-model parts (Jev-style):** a state prefilled once, forks per question, and a typed Choice / Score / Noul readout with calibration metrics.
+- **Training:** a Lightning Fabric loop, Muon and DeepSeek-style Muon, FP warm start → LittleBit conversion, and Optuna sweeps.
+- **Measurement:** quality, stored size, RAM, peak memory, CPU time and wall time for both training and inference.
+
+`src/` holds the primitives, `examples/` shows how to combine them, and `benchmarks/` runs examples or primitives
+side by side on every dimension. `docs/primitives.md` maps the target architectures (looped LittleBit core,
+sparse state index, MTP/verify, typed decision readout) to what exists and what is still missing.
+
+It started as a prototype of LittleBit trained **from scratch** (no pretrained teacher, no distillation). The
+results below come from that work. References: Lee et al., *LittleBit: Ultra Low-Bit Quantization via Latent
+Factorization* (NeurIPS 2025, arXiv:2506.13771), LittleBit-2 (arXiv:2603.00042), and Ma et al., *The Era of
+1-bit LLMs* (BitNet b1.58, 2024).
 
 All numbers below come from CPU runs on a toy setup: synthetic order-2 Markov data (vocab 32, known best
 possible loss ≈ 0.89-0.90 depending on seed; uniform guessing = 3.47), TinyLM with d_model 128, 2 blocks,
@@ -79,6 +93,13 @@ Settings:
 - BitNet trains with 8-bit activations, while LittleBit and FP16 use full-precision activations.
 
 ### Full comparison at matched stored size (`uv run python benchmarks/compare.py`)
+
+> **Inference speed in this table is not a fair test of the bit methods.** FP16 uses an optimized BLAS
+> matmul, while LittleBit and BitNet emulate low-bit math: packed weights are unpacked to FP32 on every call,
+> then multiplied in FP32. At about 100 KiB the model also sits in cache, so the memory-bandwidth saving that makes
+> bit weights fast never appears. Size-matching also makes the bit models wide and the FP16 models narrow, so
+> FP16 d32 does about 16× fewer block FLOPs than any d128 model. Loss, stored size, RAM, training time and
+> training memory are fair. A real speed comparison needs native low-bit kernels and a memory-bound size.
 
 Each model trains for 1,500 steps on seed 0 in its own process, on one CPU thread, with its tuned
 settings. The loss row is the 3-seed mean from the frontier sweep. "Fast path" means FP32 weights or cached
