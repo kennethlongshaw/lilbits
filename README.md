@@ -135,6 +135,36 @@ latents; scales and norms are never decayed.
 | LittleBit, svd + ITQ         | 1.179 → 1.180    | 1.198 → 1.199   |
 | LittleBit, FP warm 300 + ITQ | 1.089 → 1.102    | 1.115 → 1.127   |
 
+### DeepSeek-V4 Muon recipe (`--optim muon_ds`, `--qk-norm`)
+
+`src/littlebit_scratch/optim.py` implements DeepSeek-V4's Muon: 10 Newton-Schulz steps (8 with the fast
+coefficients, 2 with (2, -1.5, 0.5) to pin singular values at 1), update RMS 0.18, Nesterov 0.95.
+`--qk-norm` adds RMSNorm on per-head queries/keys (DeepSeek's replacement for QK-Clip).
+`--muon-ns-steps 10` runs stock `torch.optim.Muon` with 10 steps of the fast coefficients only.
+
+Matched params (`--bpw 1.41`), weight decay 0, 1,500 steps, seed 0. "Steps to" = first eval (every 100 steps)
+at or below the target. LittleBit rows use the 300-step FP warm start + ITQ (the optimizer also runs the FP phase).
+
+| run | final eval | steps to 1.05 / 1.00 (FP) or 1.15 / 1.10 (LittleBit) | wall time* |
+|---|---|---|---|
+| FP, AdamW | 0.984 | 800 / 1,300 | 109 s |
+| FP, torch Muon 5 steps | 0.980 | 700 / 1,100 | 126 s |
+| FP, torch Muon 10 steps | 0.980 | 700 / 1,100 | 131 s† |
+| FP, DeepSeek Muon | 0.979 | 700 / 1,100 | 143 s |
+| FP, DeepSeek Muon + QK-norm | 0.980 | 700 / 1,100 | 156 s |
+| LittleBit, AdamW | **1.057** | **600 / 900** | 132 s |
+| LittleBit, torch Muon 5 steps | 1.084 | 900 / 1,200 | 169 s |
+| LittleBit, torch Muon 10 steps | 1.066 | 700 / 1,100 | 186 s† |
+| LittleBit, DeepSeek Muon | 1.065 | 700 / 1,100 | 170 s |
+| LittleBit, DeepSeek Muon + QK-norm | 1.080 | 800 / 1,200 | 179 s |
+
+\* 4 runs shared the CPU, 1 thread each. † These two ran 2 at a time, so their times aren't directly comparable.
+
+On FP weights every Muon variant needs ~15% fewer steps than AdamW to reach 1.00, but costs more per step on CPU,
+so wall-clock is a wash at this size. More Newton-Schulz steps and the two-phase schedule don't change FP
+results. On LittleBit latents AdamW still wins; 10 NS steps (stock or DeepSeek) close part of the gap vs
+5 steps, and the DeepSeek two-phase schedule adds nothing over plain 10 steps. QK-norm didn't help either.
+
 ## Baseline vs LittleBit on the same data (`uv run lb-bench`)
 
 All three train on the identical Markov token stream (same seed), d_model 128, 2 blocks, batch 32 × seq 64,
@@ -207,6 +237,7 @@ Notes:
 - `src/littlebit_scratch/model.py`: attention, SwiGLU, `TransformerBlock`, `TinyLM`
 - `src/littlebit_scratch/data.py`: Markov source with known entropy floor, char-level text source
 - `src/littlebit_scratch/train.py`: training loop / `lb-train` CLI
+- `src/littlebit_scratch/optim.py`: DeepSeek-V4-style Muon (hybrid Newton-Schulz)
 - `src/littlebit_scratch/bench.py`: `lb-bench`, FP vs LittleBit size/loss/time/memory comparison
 - `results/`: logs from the comparison runs above
 - `tests/`: layer math, STE gradients, bpw budget, causality, SVD/ITQ init, and from-scratch training smoke tests

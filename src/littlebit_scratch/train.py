@@ -19,6 +19,7 @@ import torch.nn.functional as F
 
 from .data import MarkovSource, TextSource
 from .littlebit import LittleBitLinear, zero_margin
+from .optim import DeepSeekMuon
 from .model import Config, TinyLM, compression_report, convert_fp_to_littlebit
 
 
@@ -59,7 +60,8 @@ def param_groups(model: torch.nn.Module, lr: float, scale_lr_mult: float, weight
 
 
 def make_optimizers(model, lr: float, scale_lr_mult: float, weight_decay: float, latent_lr_mult: float,
-                    optim: str = "adamw", muon_lr_mult: float = 1.0, muon_embed: bool = False):
+                    optim: str = "adamw", muon_lr_mult: float = 1.0, muon_embed: bool = False,
+                    muon_ns_steps: int = 5):
     """AdamW for everything, or torch.optim.Muon for the 2D block matrices (FP weights and
     LittleBit latents; also embeddings/head if muon_embed) and AdamW for the rest.
 
@@ -68,12 +70,16 @@ def make_optimizers(model, lr: float, scale_lr_mult: float, weight_decay: float,
     groups = param_groups(model, lr, scale_lr_mult, weight_decay, latent_lr_mult)
     if optim == "adamw":
         return [torch.optim.AdamW(groups, betas=(0.9, 0.95))]
-    if optim != "muon":
+    if optim not in ("muon", "muon_ds"):
         raise ValueError(f"unknown optim {optim!r}")
     muon_names = {"hidden", "latent"} | ({"embed"} if muon_embed else set())
     muon_groups = [dict(g, lr=g["lr"] * muon_lr_mult) for g in groups if g["name"] in muon_names]
     adam_groups = [g for g in groups if g["name"] not in muon_names]
-    opts = [torch.optim.Muon(muon_groups, lr=lr, weight_decay=weight_decay, adjust_lr_fn="match_rms_adamw")]
+    if optim == "muon":
+        opts = [torch.optim.Muon(muon_groups, lr=lr, weight_decay=weight_decay, adjust_lr_fn="match_rms_adamw",
+                                 ns_steps=muon_ns_steps)]
+    else:
+        opts = [DeepSeekMuon(muon_groups, lr=lr, weight_decay=weight_decay)]
     if adam_groups:
         opts.append(torch.optim.AdamW(adam_groups, betas=(0.9, 0.95)))
     return opts
@@ -109,8 +115,9 @@ def latent_near_zero(model) -> float:
 def _fit(model, label: str, source, steps: int, total_steps: int, step_offset: int, batch: int, seq_len: int,
          lr: float, device: str, log_every: int, scale_lr_mult: float, latent_lr_mult: float,
          weight_decay: float, warmup: int, eval_batches, verbose: bool, history: list, t0: float,
-         optim: str = "adamw", muon_lr_mult: float = 1.0, muon_embed: bool = False):
-    opts = make_optimizers(model, lr, scale_lr_mult, weight_decay, latent_lr_mult, optim, muon_lr_mult, muon_embed)
+         optim: str = "adamw", muon_lr_mult: float = 1.0, muon_embed: bool = False, muon_ns_steps: int = 5):
+    opts = make_optimizers(model, lr, scale_lr_mult, weight_decay, latent_lr_mult, optim, muon_lr_mult, muon_embed,
+                           muon_ns_steps)
     all_groups = [g for o in opts for g in o.param_groups]
     base_lrs = [g["lr"] for g in all_groups]
 
@@ -149,7 +156,8 @@ def _fit(model, label: str, source, steps: int, total_steps: int, step_offset: i
 def train(cfg: Config, source, steps: int, batch: int, lr: float, device: str, log_every: int = 100,
           scale_lr_mult: float = 1.0, latent_lr_mult: float = 1.0, weight_decay: float = 0.0, warmup: int = 100,
           eval_batches=None, seed: int = 0, verbose: bool = True, fp_warmup: int = 0,
-          optim: str = "adamw", muon_lr_mult: float = 1.0, muon_embed: bool = False) -> dict:
+          optim: str = "adamw", muon_lr_mult: float = 1.0, muon_embed: bool = False,
+          muon_ns_steps: int = 5) -> dict:
     """Train from scratch. With fp_warmup > 0 (LittleBit only), the first fp_warmup steps train
     a full-precision copy, which is then SVD(+ITQ)-converted, as the paper does with a pretrained model."""
     torch.manual_seed(seed)
@@ -159,7 +167,8 @@ def train(cfg: Config, source, steps: int, batch: int, lr: float, device: str, l
     common = dict(source=source, total_steps=steps, batch=batch, seq_len=cfg.seq_len, lr=lr, device=device,
                   log_every=log_every, scale_lr_mult=scale_lr_mult, latent_lr_mult=latent_lr_mult,
                   weight_decay=weight_decay, warmup=warmup, eval_batches=eval_batches, verbose=verbose,
-                  history=history, t0=t0, optim=optim, muon_lr_mult=muon_lr_mult, muon_embed=muon_embed)
+                  history=history, t0=t0, optim=optim, muon_lr_mult=muon_lr_mult, muon_embed=muon_embed,
+                  muon_ns_steps=muon_ns_steps)
     offset = 0
     if fp_warmup > 0 and cfg.linear == "littlebit":
         fp_model = TinyLM(replace(cfg, linear="fp")).to(device)
@@ -191,8 +200,11 @@ def main(argv=None):
                     help="Joint-ITQ rotation iterations before binarizing (LittleBit-2); used by svd init / FP warm start")
     ap.add_argument("--fp-warmup", type=int, default=0, metavar="STEPS",
                     help="train full precision for STEPS, then SVD-convert to LittleBit (counts toward --steps)")
-    ap.add_argument("--optim", choices=["adamw", "muon"], default="adamw",
-                    help="muon = torch.optim.Muon for 2D block matrices (incl. LittleBit latents), AdamW for the rest")
+    ap.add_argument("--optim", choices=["adamw", "muon", "muon_ds"], default="adamw",
+                    help="muon = torch.optim.Muon, muon_ds = DeepSeek-V4 recipe (10-step hybrid Newton-Schulz, "
+                         "update RMS 0.18); both on 2D block matrices (incl. LittleBit latents), AdamW for the rest")
+    ap.add_argument("--muon-ns-steps", type=int, default=5, help="Newton-Schulz steps for --optim muon")
+    ap.add_argument("--qk-norm", action="store_true", help="RMSNorm on per-head queries and keys")
     ap.add_argument("--muon-lr-mult", type=float, default=1.0, help="extra lr multiplier for Muon groups")
     ap.add_argument("--muon-embed", action="store_true", help="also put embeddings/LM head on Muon")
     ap.add_argument("--d-model", type=int, default=128)
@@ -228,11 +240,12 @@ def main(argv=None):
     for mode in modes:
         cfg = Config(vocab_size=vocab, seq_len=args.seq_len, d_model=args.d_model, n_heads=args.n_heads,
                      n_layers=args.n_layers, linear=mode, bpw=args.bpw, residual=not args.no_residual,
-                     ste=args.ste, smooth_k=args.smooth_k, init=args.init, itq_iters=args.itq)
+                     ste=args.ste, smooth_k=args.smooth_k, init=args.init, itq_iters=args.itq, qk_norm=args.qk_norm)
         res = train(cfg, source, args.steps, args.batch, args.lr, args.device,
                     scale_lr_mult=args.scale_lr_mult, latent_lr_mult=args.latent_lr_mult, weight_decay=args.weight_decay,
                     eval_batches=eval_batches, seed=args.seed, fp_warmup=args.fp_warmup,
-                    optim=args.optim, muon_lr_mult=args.muon_lr_mult, muon_embed=args.muon_embed)
+                    optim=args.optim, muon_lr_mult=args.muon_lr_mult, muon_embed=args.muon_embed,
+                    muon_ns_steps=args.muon_ns_steps)
         comp = res["compression"]
         print(f"[{mode}] final eval {res['final_eval']:.4f} | block linears: {comp['block_linear_weights']:,} "
               f"weights at {comp['bpw']:.3f} bpw ({comp['bits'] / 8 / 1024:.1f} KiB)")

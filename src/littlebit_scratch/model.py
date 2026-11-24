@@ -34,6 +34,7 @@ class Config:
     smooth_k: float = 100.0
     # latent init: "small" (N(0, 0.1)), "bimodal" (+-0.5 + noise), "svd" (Dual-SVID of a random dense init)
     init: str = "small"
+    qk_norm: bool = False
     itq_iters: int = 0  # >0: Joint-ITQ rotation before binarizing (svd init / FP warm start)
 
 
@@ -57,10 +58,13 @@ def make_linear_factory(cfg: Config) -> LinearFactory:
 
 
 class Attention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, linear: LinearFactory):
+    def __init__(self, d_model: int, n_heads: int, linear: LinearFactory, qk_norm: bool = False):
         super().__init__()
         assert d_model % n_heads == 0
         self.n_heads = n_heads
+        # DeepSeek-V4-style: RMSNorm on per-head queries and keys keeps attention logits bounded
+        self.q_norm = nn.RMSNorm(d_model // n_heads) if qk_norm else nn.Identity()
+        self.k_norm = nn.RMSNorm(d_model // n_heads) if qk_norm else nn.Identity()
         self.q = linear(d_model, d_model)
         self.k = linear(d_model, d_model)
         self.v = linear(d_model, d_model)
@@ -73,7 +77,8 @@ class Attention(nn.Module):
         def heads(t: torch.Tensor) -> torch.Tensor:
             return t.view(B, T, H, C // H).transpose(1, 2)
 
-        y = F.scaled_dot_product_attention(heads(self.q(x)), heads(self.k(x)), heads(self.v(x)), is_causal=True)
+        q, k = self.q_norm(heads(self.q(x))), self.k_norm(heads(self.k(x)))
+        y = F.scaled_dot_product_attention(q, k, heads(self.v(x)), is_causal=True)
         return self.o(y.transpose(1, 2).reshape(B, T, C))
 
 
@@ -89,10 +94,10 @@ class SwiGLU(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, mlp_hidden: int, linear: LinearFactory):
+    def __init__(self, d_model: int, n_heads: int, mlp_hidden: int, linear: LinearFactory, qk_norm: bool = False):
         super().__init__()
         self.norm1 = nn.RMSNorm(d_model)
-        self.attn = Attention(d_model, n_heads, linear)
+        self.attn = Attention(d_model, n_heads, linear, qk_norm)
         self.norm2 = nn.RMSNorm(d_model)
         self.mlp = SwiGLU(d_model, mlp_hidden, linear)
 
@@ -110,7 +115,7 @@ class TinyLM(nn.Module):
         self.tok = nn.Embedding(cfg.vocab_size, cfg.d_model)
         self.pos = nn.Embedding(cfg.seq_len, cfg.d_model)
         self.blocks = nn.ModuleList(
-            TransformerBlock(cfg.d_model, cfg.n_heads, hidden, linear) for _ in range(cfg.n_layers)
+            TransformerBlock(cfg.d_model, cfg.n_heads, hidden, linear, cfg.qk_norm) for _ in range(cfg.n_layers)
         )
         self.norm = nn.RMSNorm(cfg.d_model)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)

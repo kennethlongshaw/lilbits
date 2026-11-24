@@ -1,0 +1,188 @@
+{
+  "args": {
+    "linear": "fp",
+    "bpw": 1.41,
+    "no_residual": false,
+    "ste": "clipped",
+    "smooth_k": 100.0,
+    "init": "small",
+    "itq": 0,
+    "fp_warmup": 0,
+    "optim": "muon_ds",
+    "qk_norm": false,
+    "muon_lr_mult": 1.0,
+    "muon_embed": false,
+    "d_model": 128,
+    "n_heads": 4,
+    "n_layers": 2,
+    "seq_len": 64,
+    "batch": 32,
+    "steps": 1500,
+    "lr": 0.003,
+    "scale_lr_mult": 1.0,
+    "latent_lr_mult": 0.1,
+    "weight_decay": 0.0,
+    "text": null,
+    "vocab": 32,
+    "device": "cpu",
+    "seed": 0,
+    "out": "fp_ds.json"
+  },
+  "entropy_floor": 0.8945471048355103,
+  "runs": {
+    "fp": {
+      "config": {
+        "vocab_size": 32,
+        "seq_len": 64,
+        "d_model": 128,
+        "n_heads": 4,
+        "n_layers": 2,
+        "mlp_ratio": 2.6666666666666665,
+        "linear": "fp",
+        "bpw": 1.41,
+        "residual": true,
+        "ste": "clipped",
+        "smooth_k": 100.0,
+        "init": "small",
+        "qk_norm": false,
+        "itq_iters": 0
+      },
+      "final_eval": 0.9794250726699829,
+      "compression": {
+        "block_linear_weights": 395264,
+        "bits": 6324224,
+        "bpw": 16.0
+      },
+      "history": [
+        {
+          "step": 0,
+          "phase": "fp",
+          "train": 3.6124267578125,
+          "eval": 3.610775649547577,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 100,
+          "phase": "fp",
+          "train": 3.0206549167633057,
+          "eval": 3.0133224725723267,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 200,
+          "phase": "fp",
+          "train": 1.2099591493606567,
+          "eval": 1.2423957884311676,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 300,
+          "phase": "fp",
+          "train": 1.0811898708343506,
+          "eval": 1.13350048661232,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 400,
+          "phase": "fp",
+          "train": 1.0857418775558472,
+          "eval": 1.1199074685573578,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 500,
+          "phase": "fp",
+          "train": 1.0757222175598145,
+          "eval": 1.0755826830863953,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 600,
+          "phase": "fp",
+          "train": 1.0410250425338745,
+          "eval": 1.055105298757553,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 700,
+          "phase": "fp",
+          "train": 0.9892858266830444,
+          "eval": 1.0428425669670105,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 800,
+          "phase": "fp",
+          "train": 1.0015156269073486,
+          "eval": 1.0288914740085602,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 900,
+          "phase": "fp",
+          "train": 1.0061694383621216,
+          "eval": 1.0220184326171875,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 1000,
+          "phase": "fp",
+          "train": 1.005191683769226,
+          "eval": 1.0131783038377762,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 1100,
+          "phase": "fp",
+          "train": 0.9659169316291809,
+          "eval": 0.9963928163051605,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 1200,
+          "phase": "fp",
+          "train": 0.9700437188148499,
+          "eval": 0.9965197890996933,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 1300,
+          "phase": "fp",
+          "train": 0.983130693435669,
+          "eval": 0.9888961464166641,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 1400,
+          "phase": "fp",
+          "train": 0.9539366960525513,
+          "eval": 0.981253132224083,
+          "flip": 0.0,
+          "near_zero": 0.0
+        },
+        {
+          "step": 1499,
+          "phase": "fp",
+          "train": 1.0181529521942139,
+          "eval": 0.9794250726699829,
+          "flip": 0.0,
+          "near_zero": 0.0
+        }
+      ]
+    }
+  }
+}
