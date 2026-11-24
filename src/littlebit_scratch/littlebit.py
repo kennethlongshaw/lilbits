@@ -7,8 +7,9 @@ Each weight matrix W (out x in) is represented as
 with U (out x r) and V (in x r) latent full-precision factors that are
 binarized in the forward pass, and three learned FP scale vectors:
 h (row / output scale), g (column / input scale) and l (latent scale).
-The matmul is never materialized: x -> (x*g) @ sign(V) -> *l -> @ sign(U)^T -> *h,
-which costs r*(in+out) MACs instead of in*out.
+The dense W is never materialized. The scales are folded into the small factors
+(A = g*sign(V)*l, B = h*sign(U)) and the forward is x @ A @ B^T, costing r*(in+out)
+MACs per token instead of in*out.
 
 Optionally a second "residual" path with its own factors approximates what
 the first path misses (the paper's residual factorization).
@@ -27,6 +28,7 @@ from __future__ import annotations
 import math
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 FP_BITS = 16  # bits charged for each full-precision scale entry
@@ -234,7 +236,25 @@ class LittleBitLinear(nn.Module):
             for p in self.paths:
                 p.h.mul_(ratio)
 
+    def factors(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Scale-folded factors A (in x R) and B (out x R), R = rank * paths.
+
+        A = [diag(g_i) sign(V_i) diag(l_i)]_i and B = [diag(h_i) sign(U_i)]_i concatenated
+        along the rank axis, so sum_i W_i = B A^T. The scales touch only weight-sized
+        tensors, never activations, and all paths run as one pair of matmuls.
+        """
+        A = [p.g[:, None] * binarize(p.V, self.ste, self.smooth_k) * p.l[None, :] for p in self.paths]
+        B = [p.h[:, None] * binarize(p.U, self.ste, self.smooth_k) for p in self.paths]
+        if len(self.paths) == 1:
+            return A[0], B[0]
+        return torch.cat(A, dim=1), torch.cat(B, dim=1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        A, B = self.factors()
+        return F.linear(F.linear(x, A.t()), B, self.bias)
+
+    def forward_reference(self, x: torch.Tensor) -> torch.Tensor:
+        """Unfused per-path forward (scales applied to activations); for tests."""
         y = self.paths[0](x, self.ste, self.smooth_k)
         for p in self.paths[1:]:
             y = y + p(x, self.ste, self.smooth_k)

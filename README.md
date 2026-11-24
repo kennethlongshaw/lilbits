@@ -17,7 +17,7 @@ W_hat = diag(h) · sign(U) · diag(l) · sign(V)^T · diag(g)        U: out×r, 
 - `U`, `V` are full-precision *latent* factors, binarized to ±1 in the forward pass.
 - `h` (row), `g` (column) and `l` (latent) are learned FP16 scale vectors.
 - Optional residual factorization adds a second path with its own factors (`--no-residual` turns it off).
-- The forward pass never builds `W`: `((x·g) @ sign(V)) · l @ sign(U)^T · h`.
+- The forward pass never builds `W`: scales fold into the factors, `A = g·sign(V)·l`, `B = h·sign(U)` (paths concatenated), then `y = x @ A @ Bᵀ`.
 - Bits/weight = paths · (r·(in+out) + 16·(in+out+r)) / (in·out). `rank_for_bpw` picks the rank for a target.
 - Sign gradients use a straight-through estimator: `clipped` (identity inside |x|≤1, the default here) or
   `smooth` (SmoothSign: sign forward, d/dx tanh(kx) backward, as in the paper's QAT).
@@ -138,7 +138,8 @@ latents; scales and norms are never decayed.
 ## Baseline vs LittleBit on the same data (`uv run lb-bench`)
 
 All three train on the identical Markov token stream (same seed), d_model 128, 2 blocks, batch 32 × seq 64,
-AdamW, weight decay 0.1, 1 CPU thread each. Saved as `results/bench_d128.json`.
+AdamW, weight decay 0.1, 1 CPU thread each. Saved as `results/bench_d128.json`. This table was measured
+*before* the fused forward (below), so its LittleBit wall time, peak memory and inference time are the old, slower ones.
 
 | metric | FP16 baseline | LittleBit ~1 bpw, SVD+ITQ init (pure from scratch) | LittleBit ~1 bpw, 300-step FP warm start + SVD+ITQ |
 |---|---|---|---|
@@ -157,28 +158,32 @@ AdamW, weight decay 0.1, 1 CPU thread each. Saved as `results/bench_d128.json`.
 
 `uv run lb-bench --bpw 1.41` raises LittleBit's ranks (attention 15→27, MLP 29→48 per residual path) until it has as
 many trainable FP32 parameters as the baseline (410,256 vs 412,288). Saved as `results/bench_d128_matched_params.json`.
+Measured with the fused forward, configs run one after another (not concurrently).
 
 | metric | FP16 baseline | LittleBit ~1.41 bpw, SVD+ITQ init (pure from scratch) | LittleBit ~1.41 bpw, 300-step FP warm start + SVD+ITQ |
 |---|---|---|---|
-| Final eval loss (floor 0.895) | 0.986 | 1.150 | 1.045 |
+| Final eval loss (floor 0.895) | 0.986 | 1.155 | 1.050 |
 | Training steps / tokens seen | 1,500 / 3.07M | 1,500 / 3.07M | 1,500 / 3.07M (300 FP) |
-| Wall time (ms/step) | 111 s (74) | 245 s (163) | 216 s (144) |
+| Wall time (ms/step) | 104 s (70) | 148 s (98) | 134 s (90) |
 | Trainable params (FP32 while training) | 412,288 | 410,256 | 410,256 |
 | Train state: weights+grads+AdamW | 6.29 MiB | 6.26 MiB | 6.26 MiB |
-| Train peak memory (RSS delta / CUDA peak) | 230 MiB | 375 MiB | 363 MiB |
+| Train peak memory (RSS delta / CUDA peak) | 228 MiB | 240 MiB | 239 MiB |
 | Deployed block linears | 772.0 KiB (16.00 bpw) | 67.7 KiB (1.40 bpw) | 67.7 KiB (1.40 bpw) |
 | Deployed whole model | 805.2 KiB | 101.0 KiB | 101.0 KiB |
 | Compression vs FP16 (blocks / whole) | 1.0x / 1.0x | 11.4x / 8.0x | 11.4x / 8.0x |
-| Inference ms per batch (unpacked) | 18.4 | 28.0 | 45.7 |
+| Inference ms per batch (unpacked) | 20.0 | 21.5 | 22.8 |
 
 Notes:
 - "Deployed" counts LittleBit block weights as packed sign bits + FP16 scales, everything else as FP16.
   The code doesn't actually pack bits yet; that's the storage format the numbers assume.
-- Training keeps FP32 latents, so training memory does not shrink 16x: at ~1 bpw there are ~0.6 latent
-  values per original weight. Peak training memory is *higher* for LittleBit here because activations dominate
-  at this size and each LittleBit linear saves ~4 intermediates per path for backward (2 paths) vs 1 for nn.Linear.
-- Inference time uses the unpacked training forward (two skinny FP32 matmuls per path), not a bit-packed kernel,
-  so it says nothing about deployed speed.
+- Training keeps FP32 latents, so training memory does not shrink with bpw: at ~1 bpw there are ~0.6 latent
+  values per original weight.
+- Fused forward: the scales are folded into the weight-sized factors (`A = g·sign(V)·l`, `B = h·sign(U)`) and
+  residual paths are concatenated along the rank axis, so a layer is `x @ A @ Bᵀ`, two matmuls. Before this,
+  scales were applied to activations per path: training steps were ~2× the baseline's and peak memory ~1.6×.
+  Now it's ~1.4× time and about the same memory. What's left is op overhead (sign/STE and scale ops per
+  layer), which matters at this tiny size and should shrink relative to matmuls at real widths.
+- Inference time uses the same unpacked FP32 forward, not a bit-packed kernel, so it says nothing about deployed speed.
 - The FP warm-start row's train-state line covers only the LittleBit phase; its FP phase needs the baseline's.
 
 ## Layout

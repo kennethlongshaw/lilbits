@@ -99,3 +99,21 @@ def test_init_preserves_scale():
     x = torch.randn(512, 256)
     ratio = layer(x).std() / x.std()
     assert 0.5 < ratio.item() < 2.0
+
+
+@pytest.mark.parametrize("residual", [False, True])
+@pytest.mark.parametrize("ste", ["smooth", "clipped"])
+def test_fused_forward_matches_reference_including_grads(residual, ste):
+    torch.manual_seed(0)
+    layer = LittleBitLinear(24, 40, rank=6, residual=residual, bias=True, ste=ste)
+    with torch.no_grad():
+        for p in layer.parameters():
+            p.add_(torch.randn_like(p) * 0.05)
+    x = torch.randn(3, 5, 24)
+    y_fused = layer(x)
+    g_fused = torch.autograd.grad(y_fused.pow(2).sum(), list(layer.parameters()))
+    y_ref = layer.forward_reference(x)
+    g_ref = torch.autograd.grad(y_ref.pow(2).sum(), list(layer.parameters()))
+    torch.testing.assert_close(y_fused, y_ref, rtol=1e-4, atol=1e-5)
+    for a, b in zip(g_fused, g_ref):
+        torch.testing.assert_close(a, b, rtol=1e-3, atol=1e-4)
