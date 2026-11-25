@@ -12,7 +12,8 @@
            "none"  every byte is a patch (the body runs per byte, as example 09 does per token).
       -> BODY: the looped index LM (models/looped_index.py) over patch vectors: LittleBit GDN prelude, looped core
          (FP, or shared sub-1-bit signs + per-loop scales after `convert_pocket_core`; base scales INT8 with
-         scale_bits=8), sparse token index over patches, FP coda; decode may halt the loop early.
+         scale_bits=8), sparse token index over patches, coda (LittleBit 1 bpw by default: an FP16 coda block
+         was two thirds of the deployed bytes); decode may halt the loop early.
       -> UPSAMPLE: each byte reads its patch's body output (H-Net confidence smoothing).
       -> BYTE DECODER: small FP GDN block(s) -> next-byte logits (tied with the byte embedding).
       -> MTP (switch `n_mtp`): byte draft heads; drafts are checked by one parallel pass with fixed loop count,
@@ -61,6 +62,8 @@ class PocketConfig:
     prelude_linear: str = "littlebit"
     prelude_bpw: float = 1.0
     core_bpw: float = 0.55
+    coda_linear: str = "littlebit"  # an FP coda block would be ~2/3 of the deployed bytes
+    coda_bpw: float = 1.0
     scale_bits: int = 8
     n_mtp: int = 2
 
@@ -151,6 +154,8 @@ class PocketLM(nn.Module):
                 prelude_linear=cfg.prelude_linear,
                 prelude_bpw=cfg.prelude_bpw,
                 core_bpw=cfg.core_bpw,
+                coda_linear=cfg.coda_linear,
+                coda_bpw=cfg.coda_bpw,
                 scale_bits=cfg.scale_bits,
                 n_mtp=0,
             )

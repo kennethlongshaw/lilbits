@@ -57,6 +57,7 @@ def add_args(ap):
     ap.add_argument("--core", default="littlebit", choices=["fp", "littlebit"])
     ap.add_argument("--core-bpw", type=float, default=0.55)
     ap.add_argument("--scale-bits", type=int, default=8, choices=[8, 16])
+    ap.add_argument("--coda", default="littlebit", choices=["fp", "littlebit"], help="coda block linears")
     ap.add_argument("--no-index", action="store_true")
     ap.add_argument("--mtp", type=int, default=2)
     ap.add_argument("--qa-steps", type=int, default=4, help="instruct stage: steps on Shakespeare QA pairs")
@@ -75,6 +76,7 @@ def pocket_cfg(args) -> PocketConfig:
         n_loops=args.loops,
         core_bpw=args.core_bpw,
         scale_bits=args.scale_bits,
+        coda_linear=args.coda,
         n_mtp=args.mtp,
     )
 

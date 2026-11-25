@@ -63,6 +63,8 @@ class LoopedIndexConfig:
     scale_bits: int = 16  # LittleBit h, g, l scales of the prelude and (once converted) the core: 16 or 8 (INT8)
     core_linear: str = "fp"  # stage 1 trains the core in FP; convert_core_to_littlebit() for stage 2
     core_bpw: float = 0.55
+    coda_linear: str = "fp"  # "littlebit" puts the coda on LittleBit at coda_bpw (the FP coda can dominate size)
+    coda_bpw: float = 1.0
     n_mtp: int = 2  # draft heads: up to n_mtp drafts per pass
     loop_memory: bool = True
 
@@ -166,7 +168,10 @@ class LoopedIndexLM(nn.Module):
         pre = _linear(cfg.prelude_linear, cfg.prelude_bpw, cfg.scale_bits)
         self.prelude = nn.ModuleList(StatefulBlock(d, cfg.n_heads, pre) for _ in range(cfg.n_prelude))
         self.core = CoreBlock(cfg)
-        self.coda = nn.ModuleList(StatefulBlock(d, cfg.n_heads, _linear("fp", 0)) for _ in range(cfg.n_coda))
+        self.coda = nn.ModuleList(
+            StatefulBlock(d, cfg.n_heads, _linear(cfg.coda_linear, cfg.coda_bpw, cfg.scale_bits))
+            for _ in range(cfg.n_coda)
+        )
         self.norm = nn.RMSNorm(d)
         self.mtp = nn.ModuleList(MTPHead(d) for _ in range(cfg.n_mtp))
         self.use_index = True  # stage switches
