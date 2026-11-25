@@ -45,3 +45,18 @@ def test_sampling_stops_and_tasks_are_well_formed():
     assert run_tool(call) != "ERROR" and run_tool("bogus()") == "ERROR"
     _, m = segment_tensors([t], 200)
     assert m.sum() == len(t[1][0]) + len(t[4][0])
+
+
+def test_grpo_kl_term_is_nonnegative_and_pulls_toward_reference():
+    import torch
+
+    from lilbits.training.preference import grpo_loss
+
+    logp = torch.tensor([-5.0, -9.0, -3.0, -4.0], requires_grad=True)
+    ref = torch.tensor([-6.0, -6.0, -6.0, -6.0])
+    loss, info = grpo_loss(logp, torch.zeros(4), 4, torch.full((4,), 3.0), ref, kl=1.0)
+    assert info["kl"] >= 0
+    loss.backward()
+    assert logp.grad is not None
+    # gradient descent moves each logp toward ref: above ref -> positive grad (decrease), below -> negative
+    assert (logp.grad[[0, 2, 3]] > 0).all() and logp.grad[1] < 0

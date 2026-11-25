@@ -1,0 +1,34 @@
+
+== train ==
+  init                             loaded /tmp/i13_epoch.pt: pretrain and warm-up skipped
+  ops: SFT                         {steps: 500, last_loss: 0.304, ce: 0.2924, tau: 0.3, load_balance: 1.165, loss_curve: [0.501381226181984, 0.49880566835403445, 0.5026510363817215, 0.4467795670032501, 0.44139248609542847, 0.4103883111476898, 0.3850462406873703, 0.3540078806877136, 0.3290257906913757, 0.3255483090877533], wall_s: 930.4, cpu_s: 1815, cpu_util: 1.95, peak_extra_mib: 1061}
+  attend: SFT                      {steps: 500, last_loss: 0.2267, ce: 0.2267, tau: 0.3, loss_curve: [0.4666968911886215, 0.44903587639331816, 0.426704106926918, 0.4057603293657303, 0.38109880924224854, 0.354846647977829, 0.30659400910139084, 0.27182200849056243, 0.23474781304597855, 0.22755137830972672], wall_s: 64.84, cpu_s: 129, cpu_util: 1.99, peak_extra_mib: 211.5}
+  wall_s                           995.5
+  cpu_s                            1944
+  cpu_util                         1.953
+  peak_extra_mib                   1070
+
+== test ==
+  task                             sort
+  why                              one pointer per output byte
+  ops                              {score_by_loops: {1 loops: 0, 2 loops: 0, 3 loops: 0, 4 loops: 0}, expected_chain_rate: 1, op_usage_by_loop: {loop 0: {attend: 50}, loop 1: {attend: 50}, loop 2: {attend: 50}, loop 3: {attend: 50}}}
+  attend                           {score_by_loops: {1 loops: 0, 2 loops: 0.02, 3 loops: 0.08, 4 loops: 0.06}}
+  sample_trace                     attend -> attend -> attend -> attend
+  wall_s                           26.9
+  cpu_s                            53.29
+  cpu_util                         1.981
+  peak_extra_mib                   1.504
+
+== infer ==
+  ops                              {ms: 72.98, answer: CAMILLO, CAMILLO, MARCIU, reference: BENVOLIO, CAMILLO, HASTINGS, MARIANA, trace: attend -> attend -> attend -> attend}
+  attend                           {ms: 70.42, answer: BENVOLIO, CAMILLO, MARIA, reference: BENVOLIO, CAMILLO, HASTINGS, MARIANA, trace: attend -> attend -> attend -> attend}
+  wall_s                           0.4652
+  cpu_s                            0.6007
+  cpu_util                         1.291
+  peak_extra_mib                   0.6797
+
+== size ==
+  ops                              {params: 351624, weight_ram_bytes: 1406496, deployed_bytes: 7.032e+05}
+  attend                           {params: 350751, weight_ram_bytes: 1403004, deployed_bytes: 7.015e+05}
+  checkpoint_file_bytes            2839893
+METRICS {"example": "13_operator_loop", "mode": "all", "train": {"init": "loaded /tmp/i13_epoch.pt: pretrain and warm-up skipped", "ops: SFT": {"steps": 500, "last_loss": 0.3040083050727844, "ce": 0.29235726594924927, "tau": 0.3, "load_balance": 1.165104627609253, "loss_curve": [0.501381226181984, 0.49880566835403445, 0.5026510363817215, 0.4467795670032501, 0.44139248609542847, 0.4103883111476898, 0.3850462406873703, 0.3540078806877136, 0.3290257906913757, 0.3255483090877533], "wall_s": 930.3667721259999, "cpu_s": 1814.5831737869999, "cpu_util": 1.9503955086878901, "peak_extra_mib": 1061.38671875}, "attend: SFT": {"steps": 500, "last_loss": 0.22669580578804016, "ce": 0.22669580578804016, "tau": 0.3, "loss_curve": [0.4666968911886215, 0.44903587639331816, 0.426704106926918, 0.4057603293657303, 0.38109880924224854, 0.354846647977829, 0.30659400910139084, 0.27182200849056243, 0.23474781304597855, 0.22755137830972672], "wall_s": 64.84341636599993, "cpu_s": 129.01779313099996, "cpu_util": 1.989682227765058, "peak_extra_mib": 211.45703125}, "wall_s": 995.5150606020002, "cpu_s": 1943.913005418, "cpu_util": 1.9526706147895863, "peak_extra_mib": 1069.72265625}, "test": {"task": "sort", "why": "one pointer per output byte", "ops": {"score_by_loops": {"1 loops": 0.0, "2 loops": 0.0, "3 loops": 0.0, "4 loops": 0.0}, "expected_chain_rate": 1.0, "op_usage_by_loop": {"loop 0": {"attend": 50}, "loop 1": {"attend": 50}, "loop 2": {"attend": 50}, "loop 3": {"attend": 50}}}, "attend": {"score_by_loops": {"1 loops": 0.0, "2 loops": 0.02, "3 loops": 0.08, "4 loops": 0.06}}, "sample_trace": "attend -> attend -> attend -> attend", "wall_s": 26.90491836199999, "cpu_s": 53.293701304000024, "cpu_util": 1.9808163171857478, "peak_extra_mib": 1.50390625}, "infer": {"ops": {"ms": 72.97834500013778, "answer": "CAMILLO, CAMILLO, MARCIU", "reference": "BENVOLIO, CAMILLO, HASTINGS, MARIANA", "trace": "attend -> attend -> attend -> attend"}, "attend": {"ms": 70.42445700017197, "answer": "BENVOLIO, CAMILLO, MARIA", "reference": "BENVOLIO, CAMILLO, HASTINGS, MARIANA", "trace": "attend -> attend -> attend -> attend"}, "wall_s": 0.465151175000301, "cpu_s": 0.6006881389998853, "cpu_util": 1.2913826112542799, "peak_extra_mib": 0.6796875}, "size": {"ops": {"params": 351624, "weight_ram_bytes": 1406496, "deployed_bytes": 703248.0}, "attend": {"params": 350751, "weight_ram_bytes": 1403004, "deployed_bytes": 701502.0}, "checkpoint_file_bytes": 2839893}}

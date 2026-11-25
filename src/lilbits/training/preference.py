@@ -68,7 +68,12 @@ def grpo_loss(
     loss = -(adv * logp / norm).mean()
     info = {"reward": rewards.mean().item(), "adv_abs": adv.abs().mean().item()}
     if ref_logp is not None and kl:
-        k = ((logp - ref_logp) / norm).mean()  # sample estimate of KL(pi || ref) per byte
+        # k3 estimator of KL(pi || ref) per byte (as in GRPO): exp(r) - r - 1 with r = log ref/pi, which is >= 0
+        # and whose gradient pulls pi toward ref. The plain log-ratio (k1) has zero expected gradient wrt the
+        # sampling distribution's KL and, minimized on the model's own samples, just pushes their log-probs down:
+        # with no reward signal that drives the policy toward noise.
+        r = (ref_logp - logp) / norm
+        k = (r.exp() - r - 1).mean()
         loss = loss + kl * k
         info["kl"] = k.item()
     return loss, info

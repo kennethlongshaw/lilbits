@@ -1,0 +1,36 @@
+
+== train ==
+  init                             loaded /tmp/i13_epoch.pt: pretrain and warm-up skipped
+  ops: SFT                         {steps: 500, last_loss: 0.576, ce: 0.5636, tau: 0.3, load_balance: 1.249, loss_curve: [0.6599928331375122, 0.631751400232315, 0.637077739238739, 0.6109815382957459, 0.5954973578453064, 0.5909981846809387, 0.583925838470459, 0.5734789228439331, 0.572522668838501, 0.5712325954437256], wall_s: 911.1, cpu_s: 1776, cpu_util: 1.949, peak_extra_mib: 1058}
+  ops: GRPO                        {steps: 100, last_loss: -1.417, reward: 0, adv_abs: 0, kl: -28.35, loss_curve: [0.0012873031839262695, 0.011410187790170312, 0.03858363125473261, 0.06823996752500534, 0.10345916822552681, 0.0444786511361599, -0.181859864667058, -0.8357217609882355, -1.161830198764801, -1.3609779596328735], wall_s: 950.3, cpu_s: 1849, cpu_util: 1.946, peak_extra_mib: 4108}
+  attend: SFT                      {steps: 500, last_loss: 0.4932, ce: 0.4932, tau: 0.3, loss_curve: [0.6095087099075317, 0.597678724527359, 0.5934208536148071, 0.5737024033069611, 0.5564912164211273, 0.5390219789743423, 0.5330303782224655, 0.5137088489532471, 0.5049390131235123, 0.5062480366230011], wall_s: 78.02, cpu_s: 155.3, cpu_util: 1.991, peak_extra_mib: 190.8}
+  attend: GRPO                     {steps: 100, last_loss: 0.3958, reward: 0, adv_abs: 0, kl: 7.916, loss_curve: [0.0007386474593658931, 0.021884199394844473, 0.061634818091988564, 0.07628274336457253, 0.25259468108415606, 0.3180224776268005, 0.3305814579129219, 0.3858689844608307, 0.3876588225364685, 0.39320499300956724], wall_s: 289.5, cpu_s: 569.9, cpu_util: 1.968, peak_extra_mib: 758.5}
+  wall_s                           2230
+  cpu_s                            4351
+  cpu_util                         1.952
+  peak_extra_mib                   4137
+
+== test ==
+  task                             path
+  why                              chained pointer hops
+  ops                              {score_by_loops: {1 loops: 0, 2 loops: 0, 3 loops: 0, 4 loops: 0}, expected_chain_rate: 0.08, op_usage_by_loop: {loop 0: {attend: 50}, loop 1: {max: 50}, loop 2: {max: 50}, loop 3: {max: 46, attend: 4}}}
+  attend                           {score_by_loops: {1 loops: 0, 2 loops: 0, 3 loops: 0, 4 loops: 0}}
+  sample_trace                     attend -> max -> max -> max
+  wall_s                           44.16
+  cpu_s                            86.59
+  cpu_util                         1.961
+  peak_extra_mib                   87.13
+
+== infer ==
+  ops                              {ms: 92.52, answer: �""""""""""""""""""""""", reference: MARIANA BENVOLIO CAPULET, trace: attend -> max -> max -> max}
+  attend                           {ms: 83.27, answer: AAAAAAAAAAAAAAAAAAAAAAAA, reference: MARIANA BENVOLIO CAPULET, trace: attend -> attend -> attend -> attend}
+  wall_s                           0.423
+  cpu_s                            0.5873
+  cpu_util                         1.388
+  peak_extra_mib                   16.1
+
+== size ==
+  ops                              {params: 351624, weight_ram_bytes: 1406496, deployed_bytes: 7.032e+05}
+  attend                           {params: 350751, weight_ram_bytes: 1403004, deployed_bytes: 7.015e+05}
+  checkpoint_file_bytes            2839893
+METRICS {"example": "13_operator_loop", "mode": "all", "train": {"init": "loaded /tmp/i13_epoch.pt: pretrain and warm-up skipped", "ops: SFT": {"steps": 500, "last_loss": 0.5760483741760254, "ce": 0.5635553002357483, "tau": 0.3, "load_balance": 1.2493066787719727, "loss_curve": [0.6599928331375122, 0.631751400232315, 0.637077739238739, 0.6109815382957459, 0.5954973578453064, 0.5909981846809387, 0.583925838470459, 0.5734789228439331, 0.572522668838501, 0.5712325954437256], "wall_s": 911.082911861, "cpu_s": 1775.944951763, "cpu_util": 1.9492682045099627, "peak_extra_mib": 1057.62109375}, "ops: GRPO": {"steps": 100, "last_loss": -1.4174150228500366, "reward": 0.0, "adv_abs": 0.0, "kl": -28.34830093383789, "loss_curve": [0.0012873031839262695, 0.011410187790170312, 0.03858363125473261, 0.06823996752500534, 0.10345916822552681, 0.0444786511361599, -0.181859864667058, -0.8357217609882355, -1.161830198764801, -1.3609779596328735], "wall_s": 950.2686816099995, "cpu_s": 1849.447331527, "cpu_util": 1.9462362248891132, "peak_extra_mib": 4108.28515625}, "attend: SFT": {"steps": 500, "last_loss": 0.4931890368461609, "ce": 0.4931890368461609, "tau": 0.3, "loss_curve": [0.6095087099075317, 0.597678724527359, 0.5934208536148071, 0.5737024033069611, 0.5564912164211273, 0.5390219789743423, 0.5330303782224655, 0.5137088489532471, 0.5049390131235123, 0.5062480366230011], "wall_s": 78.01741779599979, "cpu_s": 155.327524283, "cpu_util": 1.9909339307941585, "peak_extra_mib": 190.75390625}, "attend: GRPO": {"steps": 100, "last_loss": 0.3958075940608978, "reward": 0.0, "adv_abs": 0.0, "kl": 7.916151523590088, "loss_curve": [0.0007386474593658931, 0.021884199394844473, 0.061634818091988564, 0.07628274336457253, 0.25259468108415606, 0.3180224776268005, 0.3305814579129219, 0.3858689844608307, 0.3876588225364685, 0.39320499300956724], "wall_s": 289.5363662999998, "cpu_s": 569.9147574269996, "cpu_util": 1.9683702075492957, "peak_extra_mib": 758.5}, "wall_s": 2229.627003099, "cpu_s": 4351.377494869001, "cpu_util": 1.9516167900823502, "peak_extra_mib": 4137.3203125}, "test": {"task": "path", "why": "chained pointer hops", "ops": {"score_by_loops": {"1 loops": 0.0, "2 loops": 0.0, "3 loops": 0.0, "4 loops": 0.0}, "expected_chain_rate": 0.08, "op_usage_by_loop": {"loop 0": {"attend": 50}, "loop 1": {"max": 50}, "loop 2": {"max": 50}, "loop 3": {"max": 46, "attend": 4}}}, "attend": {"score_by_loops": {"1 loops": 0.0, "2 loops": 0.0, "3 loops": 0.0, "4 loops": 0.0}}, "sample_trace": "attend -> max -> max -> max", "wall_s": 44.15758187099982, "cpu_s": 86.58879664600045, "cpu_util": 1.9609044013994577, "peak_extra_mib": 87.12890625}, "infer": {"ops": {"ms": 92.51725800004351, "answer": "\ufffd\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"", "reference": "MARIANA BENVOLIO CAPULET", "trace": "attend -> max -> max -> max"}, "attend": {"ms": 83.27349000046524, "answer": "AAAAAAAAAAAAAAAAAAAAAAAA", "reference": "MARIANA BENVOLIO CAPULET", "trace": "attend -> attend -> attend -> attend"}, "wall_s": 0.42300977500053705, "cpu_s": 0.5873315130002084, "cpu_util": 1.3884584889308118, "peak_extra_mib": 16.09765625}, "size": {"ops": {"params": 351624, "weight_ram_bytes": 1406496, "deployed_bytes": 703248.0}, "attend": {"params": 350751, "weight_ram_bytes": 1403004, "deployed_bytes": 701502.0}, "checkpoint_file_bytes": 2839893}}

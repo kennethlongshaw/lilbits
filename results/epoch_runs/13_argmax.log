@@ -1,0 +1,34 @@
+
+== train ==
+  init                             loaded /tmp/i13_epoch.pt: pretrain and warm-up skipped
+  ops: SFT                         {steps: 500, last_loss: 0.4224, ce: 0.411, tau: 0.3, load_balance: 1.136, loss_curve: [0.6389046573638916, 0.7090381807088852, 0.6398812597990036, 0.6091652607917786, 0.5537518256902695, 0.5507173103094101, 0.5295000398159027, 0.5182588112354278, 0.4945948255062103, 0.5056662142276764], wall_s: 917.3, cpu_s: 1769, cpu_util: 1.928, peak_extra_mib: 1060}
+  attend: SFT                      {steps: 500, last_loss: 0.4271, ce: 0.4271, tau: 0.3, loss_curve: [0.6111952227354049, 0.6400288099050522, 0.6401147162914276, 0.5828356456756592, 0.5538292527198792, 0.537240805029869, 0.5034476101398468, 0.513317546248436, 0.4783784282207489, 0.4848158013820648], wall_s: 74.1, cpu_s: 146.7, cpu_util: 1.98, peak_extra_mib: 202.4}
+  wall_s                           991.8
+  cpu_s                            1916
+  cpu_util                         1.931
+  peak_extra_mib                   1068
+
+== test ==
+  task                             argmax
+  why                              max over values, then a pointer back
+  ops                              {score_by_loops: {1 loops: 0.04, 2 loops: 0.04, 3 loops: 0.04, 4 loops: 0.04}, expected_chain_rate: 0.1, op_usage_by_loop: {loop 0: {attend: 43, max: 5, point: 1}, loop 1: {attend: 50}, loop 2: {attend: 50}, loop 3: {attend: 50}}}
+  attend                           {score_by_loops: {1 loops: 0.02, 2 loops: 0.02, 3 loops: 0.04, 4 loops: 0.04}}
+  sample_trace                     attend -> attend -> attend -> attend
+  wall_s                           7.544
+  cpu_s                            14.87
+  cpu_util                         1.971
+  peak_extra_mib                   11.3
+
+== infer ==
+  ops                              {ms: 40.8, answer: CATESBY, reference: MARIANA, trace: attend -> attend -> attend -> attend}
+  attend                           {ms: 46.22, answer: CAMILLO, reference: MARIANA, trace: attend -> attend -> attend -> attend}
+  wall_s                           0.5069
+  cpu_s                            0.5906
+  cpu_util                         1.165
+  peak_extra_mib                   3.672
+
+== size ==
+  ops                              {params: 351624, weight_ram_bytes: 1406496, deployed_bytes: 7.032e+05}
+  attend                           {params: 350751, weight_ram_bytes: 1403004, deployed_bytes: 7.015e+05}
+  checkpoint_file_bytes            2839893
+METRICS {"example": "13_operator_loop", "mode": "all", "train": {"init": "loaded /tmp/i13_epoch.pt: pretrain and warm-up skipped", "ops: SFT": {"steps": 500, "last_loss": 0.4223807454109192, "ce": 0.41102293133735657, "tau": 0.3, "load_balance": 1.1357828378677368, "loss_curve": [0.6389046573638916, 0.7090381807088852, 0.6398812597990036, 0.6091652607917786, 0.5537518256902695, 0.5507173103094101, 0.5295000398159027, 0.5182588112354278, 0.4945948255062103, 0.5056662142276764], "wall_s": 917.323211867, "cpu_s": 1768.537806321, "cpu_util": 1.9279331248160054, "peak_extra_mib": 1060.27734375}, "attend: SFT": {"steps": 500, "last_loss": 0.4271432161331177, "ce": 0.4271432161331177, "tau": 0.3, "loss_curve": [0.6111952227354049, 0.6400288099050522, 0.6401147162914276, 0.5828356456756592, 0.5538292527198792, 0.537240805029869, 0.5034476101398468, 0.513317546248436, 0.4783784282207489, 0.4848158013820648], "wall_s": 74.09978353099996, "cpu_s": 146.74152943100012, "cpu_util": 1.9803233213172637, "peak_extra_mib": 202.3828125}, "wall_s": 991.8453138259999, "cpu_s": 1915.708953874, "cpu_util": 1.931459399131742, "peak_extra_mib": 1068.40234375}, "test": {"task": "argmax", "why": "max over values, then a pointer back", "ops": {"score_by_loops": {"1 loops": 0.04, "2 loops": 0.04, "3 loops": 0.04, "4 loops": 0.04}, "expected_chain_rate": 0.1, "op_usage_by_loop": {"loop 0": {"attend": 43, "max": 5, "point": 1}, "loop 1": {"attend": 50}, "loop 2": {"attend": 50}, "loop 3": {"attend": 50}}}, "attend": {"score_by_loops": {"1 loops": 0.02, "2 loops": 0.02, "3 loops": 0.04, "4 loops": 0.04}}, "sample_trace": "attend -> attend -> attend -> attend", "wall_s": 7.544073917999867, "cpu_s": 14.867236179999963, "cpu_util": 1.9707171936011014, "peak_extra_mib": 11.3046875}, "infer": {"ops": {"ms": 40.796544999921025, "answer": "CATESBY", "reference": "MARIANA", "trace": "attend -> attend -> attend -> attend"}, "attend": {"ms": 46.22200599987991, "answer": "CAMILLO", "reference": "MARIANA", "trace": "attend -> attend -> attend -> attend"}, "wall_s": 0.5068925049999962, "cpu_s": 0.5905908029999409, "cpu_util": 1.1651204095036785, "peak_extra_mib": 3.671875}, "size": {"ops": {"params": 351624, "weight_ram_bytes": 1406496, "deployed_bytes": 703248.0}, "attend": {"params": 350751, "weight_ram_bytes": 1403004, "deployed_bytes": 701502.0}, "checkpoint_file_bytes": 2839893}}
