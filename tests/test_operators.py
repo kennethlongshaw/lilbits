@@ -74,3 +74,31 @@ def test_router_teacher_forcing_pulls_loop_toward_expected_ops():
         loss.backward()
         opt.step()
     assert info["router_ce"] < 0.5 * first
+
+
+def test_op_loop_decode_cache_matches_full_forward():
+    from lilbits.models.op_loop import OpLoopLM
+
+    torch.manual_seed(0)
+    m = OpLoopLM(32, 3).eval()
+    m.hard = True
+    x = torch.randint(0, 256, (2, 20))
+    with torch.no_grad():
+        full, _ = m(x)
+        cache = m.new_cache()
+        parts = [m(x[:, :12], cache=cache)[0]] + [m(x[:, t : t + 1], cache=cache)[0] for t in range(12, 20)]
+    assert torch.allclose(torch.cat(parts, 1), full, atol=1e-4)
+
+
+def test_straight_through_routing_trains_and_skips_unchosen_ops():
+    from lilbits.models.op_loop import OpLoopLM
+
+    torch.manual_seed(0)
+    m = OpLoopLM(32, 2)
+    m.st, m.tau = True, 0.5
+    x = torch.randint(0, 256, (2, 16))
+    loss, _ = m.loss(x, torch.ones(2, 15))
+    loss.backward()
+    assert m.loop.router.weight.grad is not None and m.loop.router.weight.grad.abs().sum() > 0
+    _, trace = m(x)
+    assert all(((p == 0) | (p == 1)).all() for p in trace)  # one-hot in the forward pass

@@ -25,20 +25,35 @@ class OpLoopLM(nn.Module):
         self.loop = OperatorLoop(d, n_loops, ops, n_set, n_vec)
         self.norm = nn.RMSNorm(d)
         self.tau, self.hard = 1.0, False  # router temperature / hard choices (set by the training schedule)
+        self.st = False  # training: straight-through one-hot routing (only chosen ops computed)
 
     @property
     def ops(self) -> tuple[str, ...]:
         return self.loop.ops
 
-    def forward(self, x: torch.Tensor, n_loops: int | None = None, generator=None, full_trace: bool = False):
+    def new_cache(self) -> dict:
+        """Decode cache: the encoder's recurrent state and the scanned context so far. Every position's loop
+        computation reads only its own registers and the context up to it, so a new byte needs one pass over
+        itself against the cached context (no recompute of earlier positions)."""
+        return {"enc": None, "ctx": None}
+
+    def forward(
+        self, x: torch.Tensor, n_loops: int | None = None, generator=None, full_trace: bool = False, cache=None
+    ):
         """x (B, T) bytes -> (logits (B, T, 256), op probabilities per loop [(B, T, n_ops)]). full_trace=True
-        returns every loop's router dict instead (op, set_in, vec_in, set_dst, vec_dst, op_logp)."""
-        ctx, _ = self.encoder(self.embed(x))
-        h = ctx
-        regs = self.loop.new_registers(x.shape[0], x.shape[1], ctx)
+        returns every loop's router dict instead (op, set_in, vec_in, set_dst, vec_dst, op_logp). With a cache
+        (new_cache), x continues the cached bytes."""
+        state = cache["enc"] if cache is not None else None
+        ctx_new, state = self.encoder(self.embed(x), state)
+        ctx = ctx_new
+        if cache is not None:
+            ctx = ctx_new if cache["ctx"] is None else torch.cat([cache["ctx"], ctx_new], 1)
+            cache["enc"], cache["ctx"] = state, ctx
+        h = ctx_new
+        regs = self.loop.new_registers(x.shape[0], x.shape[1], ctx_new, ctx.shape[1])
         trace = []
         for i in range(n_loops or self.n_loops):
-            h, regs, probs = self.loop(h, ctx, regs, i, self.tau, self.hard, generator)
+            h, regs, probs = self.loop(h, ctx, regs, i, self.tau, self.hard, generator, self.st)
             trace.append(probs if full_trace else probs["op"])
         return self.norm(h) @ self.embed.weight.t(), trace
 
@@ -89,32 +104,32 @@ class OpLoopLM(nn.Module):
 
     @torch.no_grad()
     def complete(self, prompt: bytes, max_bytes: int = 40, n_loops: int | None = None) -> tuple[str, list[str]]:
-        """Greedy answer up to a newline, with hard routing; returns (answer, op chosen per loop at the first
-        answer position)."""
+        """Greedy answer up to a newline, with hard routing and the decode cache; returns (answer, op chosen per
+        loop at the first answer position)."""
         hard, self.hard = self.hard, True
-        x = torch.tensor(list(prompt))[None]
-        out, ops_first = [], []
-        for t in range(max_bytes):
-            logits, trace = self(x, n_loops)
-            if t == 0:
-                ops_first = [self.ops[int(p[0, -1].argmax())] for p in trace]
+        cache = self.new_cache()
+        logits, trace = self(torch.tensor(list(prompt))[None], n_loops, cache=cache)
+        ops_first = [self.ops[int(p[0, -1].argmax())] for p in trace]
+        out = []
+        for _ in range(max_bytes):
             nxt = int(logits[0, -1].argmax())
             if nxt == 10:
                 break
             out.append(nxt)
-            x = torch.cat([x, torch.tensor([[nxt]])], 1)
+            logits, _ = self(torch.tensor([[nxt]]), n_loops, cache=cache)
         self.hard = hard
         return bytes(out).decode(errors="replace"), ops_first
 
     @torch.no_grad()
     def sample(self, prompt: bytes, group: int, max_bytes: int = 40, temperature: float = 1.0, generator=None):
-        """`group` sampled completions of prompt (hard routing), each up to a newline. Returns list of bytes."""
+        """`group` sampled completions of prompt (hard routing, decode cache), each up to a newline. Returns list
+        of bytes."""
         hard, self.hard = self.hard, True
-        x = torch.tensor(list(prompt))[None].expand(group, -1)
+        cache = self.new_cache()
+        logits, _ = self(torch.tensor(list(prompt))[None].expand(group, -1), cache=cache)
         done = torch.zeros(group, dtype=torch.bool)
         outs: list[list[int]] = [[] for _ in range(group)]
         for _ in range(max_bytes):
-            logits, _ = self(x)
             p = (logits[:, -1] / temperature).softmax(-1)
             tok = torch.multinomial(p, 1, generator=generator).squeeze(-1)
             tok = torch.where(done, torch.full_like(tok, 10), tok)
@@ -124,7 +139,7 @@ class OpLoopLM(nn.Module):
             done |= tok == 10
             if done.all():
                 break
-            x = torch.cat([x, tok[:, None]], 1)
+            logits, _ = self(tok[:, None], cache=cache)
         self.hard = hard
         return [bytes(o) for o in outs]
 

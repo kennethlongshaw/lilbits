@@ -18,8 +18,9 @@ the result goes, like one instruction of a program over a per-position workspace
                 noop                  nothing
     arguments   q is a projection of the chosen VEC input (h or a register); S is the chosen SET register
     router      from h and the loop index: probabilities over ops, the SET / VEC input slots and the SET / VEC
-                destination slots. Training: Gumbel-softmax (soft, annealed temperature). Inference: argmax, one
-                op per loop per position, recorded as a readable trace.
+                destination slots. Training: Gumbel-softmax (soft, annealed temperature; every op runs) or
+                straight-through (one-hot forward, only chosen ops run). Inference: argmax, one op per loop per
+                position, recorded as a readable trace.
     write back  a gated projection of the VEC destination adds to h after every loop; a shared MLP follows.
 
 Every op reads context positions <= its own (causal), so the model trains as a language model. A load-balance
@@ -39,12 +40,16 @@ VEC_OPS = ("sum", "mean", "max", "count", "attend", "mix")
 ALL_OPS = (*SET_OPS, *VEC_OPS, "noop")
 
 
-def gumbel_probs(logits: torch.Tensor, tau: float, hard: bool, generator=None) -> torch.Tensor:
-    """Soft Gumbel-softmax probabilities (training) or a one-hot argmax (hard, inference)."""
+def gumbel_probs(logits: torch.Tensor, tau: float, hard: bool, generator=None, st: bool = False) -> torch.Tensor:
+    """Soft Gumbel-softmax probabilities (training), a one-hot argmax (hard, inference), or straight-through
+    (st: one-hot of the noisy sample in the forward pass, gradient of the soft sample in the backward pass)."""
     if hard:
         return F.one_hot(logits.argmax(-1), logits.shape[-1]).to(logits)
     u = torch.rand(logits.shape, generator=generator).to(logits).clamp(1e-6, 1 - 1e-6)
-    return ((logits - (-u.log()).log()) / tau).softmax(-1)
+    y = ((logits - (-u.log()).log()) / tau).softmax(-1)
+    if st:
+        return F.one_hot(y.argmax(-1), y.shape[-1]).to(y) - y.detach() + y
+    return y
 
 
 class OperatorLoop(nn.Module):
@@ -79,25 +84,31 @@ class OperatorLoop(nn.Module):
         self.write = nn.Linear(d, d, bias=False)
         self.mlp = nn.Sequential(nn.RMSNorm(d), nn.Linear(d, 4 * d), nn.SiLU(), nn.Linear(4 * d, d))
 
-    def new_registers(self, B: int, T: int, ref: torch.Tensor):
-        return [ref.new_zeros(B, T, T) for _ in range(self.n_set)], [
+    def new_registers(self, B: int, T: int, ref: torch.Tensor, Tk: int | None = None):
+        """Zeroed registers for T query positions over Tk context positions (Tk = T unless decoding a suffix)."""
+        return [ref.new_zeros(B, T, Tk or T) for _ in range(self.n_set)], [
             ref.new_zeros(B, T, self.d) for _ in range(self.n_vec)
         ]
 
     def task_summary(self, ctx: torch.Tensor, causal: torch.Tensor) -> torch.Tensor:
         """(B, T, d): per position, a softmax-weighted causal pool of the context under one learned query."""
         a = (self.summary_k(ctx) @ self.summary_q) / math.sqrt(self.d)  # (B, T)
-        a = a[:, None, :].expand(-1, ctx.shape[1], -1).masked_fill(~causal, float("-inf"))
+        a = a[:, None, :].expand(-1, causal.shape[0], -1).masked_fill(~causal, float("-inf"))
         return a.softmax(-1) @ ctx
 
-    def forward(self, h, ctx, regs, loop: int, tau: float = 1.0, hard: bool = False, generator=None):
-        """h (B, T, d) hidden; ctx (B, T, d) scanned context; regs (sets, vecs). Returns h, regs, probs dict."""
+    def forward(self, h, ctx, regs, loop: int, tau: float = 1.0, hard: bool = False, generator=None, st=False):
+        """h (B, T, d) hidden of the last T positions; ctx (B, Tk, d) scanned context (Tk >= T); regs (sets
+        (B, T, Tk), vecs (B, T, d)). Returns h, regs, probs dict.
+        st=True trains with straight-through one-hot routing: only ops some position picked are computed (the
+        soft path computes every op at every loop), at the price of a biased router gradient."""
         B, T, d = h.shape
+        Tk = ctx.shape[1]  # context may be longer than the queries: h holds the last T positions (cached decode)
         sets, vecs = regs
-        causal = torch.ones(T, T, dtype=torch.bool, device=h.device).tril()
+        causal = (torch.arange(T, device=h.device)[:, None] + Tk - T) >= torch.arange(Tk, device=h.device)[None]
         z = self.norm(h) + self.loop_emb.weight[loop] + self.summary_o(self.task_summary(ctx, causal))
         parts = self.router(z).split(self.sizes, -1)
-        p_op, p_sin, p_vin, p_sdst, p_vdst = (gumbel_probs(x, tau, hard, generator) for x in parts)
+        p_op, p_sin, p_vin, p_sdst, p_vdst = (gumbel_probs(x, tau, hard, generator, st) for x in parts)
+        chosen = p_op.detach().flatten(0, -2).amax(0) > 0.5 if (hard or st) else None
         S = sum(p_sin[..., j, None] * sets[j] for j in range(self.n_set))  # chosen SET input (B, T, T)
         vin_all = [h, *vecs]
         vin = sum(p_vin[..., j, None] * vin_all[j] for j in range(self.n_vec + 1))
@@ -107,14 +118,14 @@ class OperatorLoop(nn.Module):
         score = score.masked_fill(~causal, float("-inf"))
         out_set, out_vec = {}, {}
         for i_op, name in enumerate(self.ops):
-            if hard and not bool(p_op[..., i_op].any()):
-                continue  # hard routing: run only the ops some position chose
+            if chosen is not None and not bool(chosen[i_op]):
+                continue  # hard / straight-through routing: run only the ops some position chose
             if name == "filter":
                 out_set[name] = torch.sigmoid(score + self.filter_bias).masked_fill(~causal, 0.0)
             elif name == "point":
                 out_set[name] = score.softmax(-1)
             elif name == "topk":
-                kk = min(self.k, T)
+                kk = min(self.k, Tk)
                 idx = S.masked_fill(~causal, -1.0).topk(kk, -1).indices
                 keep = torch.zeros_like(S).scatter(-1, idx, 1.0) * causal
                 out_set[name] = S * keep + (S - S.detach()) * (1 - keep)  # forward: masked; grad: through S

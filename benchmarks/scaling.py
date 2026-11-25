@@ -198,13 +198,13 @@ def _oploop_stream(m):
     m.hard = True
 
     def prefill(x):
-        m(x)
-        return x
+        c = m.new_cache()
+        m(x, cache=c)
+        return c
 
-    def step(x, xt):  # no recurrent state: every byte re-reads the whole context (quadratic decode)
-        x = torch.cat([x, xt], 1)
-        m(x)
-        return x
+    def step(c, xt):  # decode cache: one pass for the new byte against the cached context
+        m(xt, cache=c)
+        return c
 
     return prefill, step
 

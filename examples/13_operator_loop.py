@@ -2,8 +2,10 @@
 
 Each loop is one routed instruction (mixers/operators.py): the router picks an op (filter, point, topk, sum, mean,
 max, count, attend, mix, noop), which SET / VEC registers it reads, and where it writes; a gate folds the VEC
-result into the hidden state. Loops chain into small programs. Training routes softly (Gumbel-softmax, temperature
-annealed from 1 to --tau-end) with a load-balance loss; inference routes hard and records the op trace.
+result into the hidden state. Loops chain into small programs. Training routes softly (Gumbel-softmax, every op runs;
+temperature annealed from 1 to --tau-end) with a load-balance loss; --route st is straight-through (one-hot
+forward, only ops some position chose run; so far it neither trains nor saves time, see results/epoch_runs).
+Inference routes hard with a decode cache and records the op trace.
 
 Training stages (each model gets the same):
     pretrain  next-byte LM on the Shakespeare corpus (--pretrain-steps), so the encoder, ops and router start from
@@ -65,6 +67,12 @@ def add_args(ap):
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--seq", type=int, default=200)
     ap.add_argument("--tau-end", type=float, default=0.3)
+    ap.add_argument(
+        "--route",
+        default="soft",
+        choices=["soft", "st"],
+        help="training router: straight-through one-hot (only chosen ops run) or soft Gumbel (every op runs)",
+    )
     ap.add_argument("--eval", type=int, default=6)
     ap.add_argument(
         "--epochs",
@@ -77,10 +85,10 @@ def add_args(ap):
 
 def build(args, meta):
     torch.manual_seed(args.seed)
-    return {
-        "ops": OpLoopLM(args.d, args.loops),
-        "attend": OpLoopLM(args.d, args.loops, ops=("attend",)),
-    }
+    models = {"ops": OpLoopLM(args.d, args.loops), "attend": OpLoopLM(args.d, args.loops, ops=("attend",))}
+    for m in models.values():
+        m.st = getattr(args, "route", "soft") == "st"
+    return models
 
 
 def examples(args, seed: int, n: int):
