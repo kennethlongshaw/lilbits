@@ -183,6 +183,51 @@ def copy_sort_example(rng: random.Random, k: int, task: str) -> tuple[bytes, str
     return f"{task.upper()}: {', '.join(names)}\n=> ".encode(), ", ".join(target)
 
 
+def _excerpt(rng: random.Random, n_speeches: int, split: str, max_bytes: int) -> list[Speech]:
+    """n consecutive speeches with distinct consecutive speakers, short enough to fit max_bytes."""
+    sp = split_speeches(split)
+    while True:
+        i = rng.randrange(len(sp) - n_speeches)
+        ex = [Speech(s.speaker, s.lines[:2]) for s in sp[i : i + n_speeches]]
+        txt = "".join(f"{s.speaker}: {' '.join(s.lines)}\n" for s in ex)
+        speakers = [s.speaker for s in ex]
+        if len(txt) <= max_bytes and len(set(speakers)) == len(speakers):
+            return ex
+
+
+def _render(ex: list[Speech]) -> str:
+    return "".join(f"{s.speaker}: {' '.join(s.lines)}\n" for s in ex)
+
+
+def count_example(rng: random.Random, split: str = "train", max_bytes: int = 120) -> tuple[bytes, str]:
+    """COUNT: how many times a word occurs in a short excerpt (answer: digits). Reads only the prompt."""
+    ex = _excerpt(rng, 2, split, max_bytes)
+    words = [w.strip(".,;:!?'\"").lower() for w in _render(ex).split()]
+    words = [w for w in words if w.isalpha()]
+    w = rng.choice(words)
+    return f"{_render(ex)}COUNT {w} =>".encode() + b" ", str(words.count(w))
+
+
+def who_said_example(rng: random.Random, split: str = "train", max_bytes: int = 160) -> tuple[bytes, str]:
+    """Which speaker in the excerpt says the quoted words (a fragment of one of their lines)."""
+    ex = _excerpt(rng, 3, split, max_bytes)
+    s = rng.choice(ex)
+    words = " ".join(s.lines).split()
+    j = rng.randrange(max(1, len(words) - 2))
+    frag = " ".join(words[j : j + 3])
+    return f'{_render(ex)}WHO SAID "{frag}" =>'.encode() + b" ", s.speaker
+
+
+def who_next_example(rng: random.Random, split: str = "train", max_bytes: int = 160) -> tuple[bytes, str]:
+    """Two hops: find who says the fragment, then the speaker right after them in the excerpt."""
+    ex = _excerpt(rng, 3, split, max_bytes)
+    i = rng.randrange(len(ex) - 1)
+    words = " ".join(ex[i].lines).split()
+    j = rng.randrange(max(1, len(words) - 2))
+    frag = " ".join(words[j : j + 3])
+    return f'{_render(ex)}WHO ANSWERS "{frag}" =>'.encode() + b" ", ex[i + 1].speaker
+
+
 TOOLS = {"search": "speaker of the speech containing the text", "next": "line after the given line"}
 
 
