@@ -5,6 +5,15 @@ max, count, attend, mix, noop), which SET / VEC registers it reads, and where it
 result into the hidden state. Loops chain into small programs. Training routes softly (Gumbel-softmax, temperature
 annealed from 1 to --tau-end) with a load-balance loss; inference routes hard and records the op trace.
 
+Training stages (each model gets the same):
+    pretrain  next-byte LM on the Shakespeare corpus (--pretrain-steps), so the encoder, ops and router start from
+              real text instead of cold
+    warm-up   supervised on generated problems from every task, with teacher-forced router targets: at answer
+              positions, loop j is pushed toward the task's j-th expected op group (-log P(op in group)), on top of
+              the answer CE (--warmup-steps, --router-weight)
+    SFT       the chosen task alone, router free (so the test shows whether the routing holds without supervision)
+    GRPO      optional, on-policy against a frozen copy (--grpo-steps; path rewards shortest vs longer paths)
+
     models   ops      OpLoopLM with every operator
              attend   the same loop with attention as its only op (the transformer-style baseline)
     tasks    (op_tasks.py, Shakespeare character names; each built to need a known op chain)
@@ -33,7 +42,7 @@ from lilbits.measure import Meter
 from lilbits.models.op_loop import OpLoopLM
 from lilbits.op_tasks import TASKS, chain_match, make, score
 from lilbits.runner import Example, fit, run
-from lilbits.shakespeare import segment_tensors
+from lilbits.shakespeare import ShakespeareBytes, segment_tensors, text_of
 from lilbits.training.preference import grpo_loss, seq_logprob
 
 
@@ -41,6 +50,15 @@ def add_args(ap):
     ap.add_argument("--task", default="count", choices=list(TASKS))
     ap.add_argument("--d", type=int, default=96)
     ap.add_argument("--loops", type=int, default=4)
+    ap.add_argument("--pretrain-steps", type=int, default=2, help="Shakespeare LM steps (default: smoke run)")
+    ap.add_argument("--warmup-steps", type=int, default=2, help="mixed-task router warm-up steps")
+    ap.add_argument(
+        "--init",
+        default="",
+        help="path: load pretrained + warmed-up weights from it if it exists (skipping those stages), else save "
+        "them there; the stages are task-independent, so one file seeds every task's run",
+    )
+    ap.add_argument("--router-weight", type=float, default=1.0, help="warm-up router teacher-forcing weight")
     ap.add_argument("--steps", type=int, default=4, help="SFT steps (default: smoke run)")
     ap.add_argument("--grpo-steps", type=int, default=0, help="path: GRPO steps after SFT")
     ap.add_argument("--group", type=int, default=4, help="GRPO samples per prompt")
@@ -48,7 +66,12 @@ def add_args(ap):
     ap.add_argument("--seq", type=int, default=200)
     ap.add_argument("--tau-end", type=float, default=0.3)
     ap.add_argument("--eval", type=int, default=6)
-    ap.add_argument("--epochs", type=float, default=0.0, help="> 0: SFT steps = epochs x 4000 examples / batch")
+    ap.add_argument(
+        "--epochs",
+        type=float,
+        default=0.0,
+        help="> 0: pretrain = epochs x corpus / (batch x seq) steps; warm-up and SFT = epochs x 4000 examples / batch",
+    )
     ap.add_argument("--schedule", default="constant", choices=["constant", "cosine"])
 
 
@@ -69,15 +92,80 @@ def rows(exs):
     return [[(e.prompt, False), ((e.answer + "\n").encode(), True)] for e in exs]
 
 
+def mixed(seed: int, n: int):
+    """n problems drawn round-robin from every task, with their expected op chains."""
+    rng = random.Random(seed)
+    names = list(TASKS)
+    tasks = [names[(seed + i) % len(names)] for i in range(n)]
+    return [(t, make(t, rng)) for t in tasks]
+
+
 def train_fn(models, args, fab):
     out: dict = {}
     g = torch.Generator().manual_seed(args.seed)
     if args.epochs > 0:
-        args.steps = max(1, round(args.epochs * 4000 / args.batch))
+        args.pretrain_steps = max(1, round(args.epochs * len(text_of("train")) / (args.batch * args.seq)))
+        args.warmup_steps = args.steps = max(1, round(args.epochs * 4000 / args.batch))
+    from pathlib import Path
+
+    seeded = bool(args.init) and Path(args.init).exists()
+    if seeded:
+        for name, sd in torch.load(args.init, weights_only=True).items():
+            models[name].load_state_dict(sd)
+        out["init"] = f"loaded {args.init}: pretrain and warm-up skipped"
+    for name, model in models.items():
+        if args.pretrain_steps and not seeded:
+            corpus = ShakespeareBytes("train", seed=args.seed)
+
+            def lm_batch(i, model=model, corpus=corpus):
+                model.tau = 1.0
+                x = corpus.sample(args.batch, args.seq)
+                return x, torch.ones(x.shape[0], x.shape[1] - 1)
+
+            with Meter() as m:
+                info = fit(
+                    fab,
+                    model,
+                    lm_batch,
+                    lambda mod, b, model=model: model.loss(b[0], b[1], generator=g),
+                    args.pretrain_steps,
+                    lr=2e-3,
+                    schedule=args.schedule,
+                )
+            out[f"{name}: pretrain"] = {**info, **m.as_dict()}
+
+        if args.warmup_steps and not seeded:
+
+            def warm_batch(i, model=model):
+                model.tau = 1.0 + (args.tau_end - 1.0) * i / max(1, args.warmup_steps - 1)
+                pairs = mixed(10_000 + i, args.batch)
+                x, mk = segment_tensors(rows([e for _, e in pairs]), args.seq)
+                return x, mk, model.op_targets([TASKS[t][1] for t, _ in pairs])
+
+            with Meter() as m:
+                info = fit(
+                    fab,
+                    model,
+                    warm_batch,
+                    lambda mod, b, model=model: model.loss(
+                        b[0], b[1], generator=g, op_targets=b[2], router_weight=args.router_weight
+                    ),
+                    args.warmup_steps,
+                    lr=2e-3,
+                    schedule=args.schedule,
+                )
+            out[f"{name}: warm-up"] = {**info, **m.as_dict()}
+
+    if args.init and not seeded:
+        Path(args.init).parent.mkdir(parents=True, exist_ok=True)
+        torch.save({k: v.state_dict() for k, v in models.items()}, args.init)
+
     for name, model in models.items():
 
         def batch(i, model=model):
-            model.tau = 1.0 + (args.tau_end - 1.0) * i / max(1, args.steps - 1)  # anneal the router temperature
+            model.tau = args.tau_end  # warm-up already annealed the router (stays at 1 -> tau-end if it was skipped)
+            if not args.warmup_steps:
+                model.tau = 1.0 + (args.tau_end - 1.0) * i / max(1, args.steps - 1)
             return segment_tensors(rows(examples(args, i, args.batch)), args.seq)
 
         with Meter() as m:

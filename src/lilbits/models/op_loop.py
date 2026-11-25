@@ -30,25 +30,62 @@ class OpLoopLM(nn.Module):
     def ops(self) -> tuple[str, ...]:
         return self.loop.ops
 
-    def forward(self, x: torch.Tensor, n_loops: int | None = None, generator=None):
-        """x (B, T) bytes -> (logits (B, T, 256), op probabilities per loop [(B, T, n_ops)])."""
+    def forward(self, x: torch.Tensor, n_loops: int | None = None, generator=None, full_trace: bool = False):
+        """x (B, T) bytes -> (logits (B, T, 256), op probabilities per loop [(B, T, n_ops)]). full_trace=True
+        returns every loop's router dict instead (op, set_in, vec_in, set_dst, vec_dst, op_logp)."""
         ctx, _ = self.encoder(self.embed(x))
         h = ctx
         regs = self.loop.new_registers(x.shape[0], x.shape[1], ctx)
         trace = []
         for i in range(n_loops or self.n_loops):
             h, regs, probs = self.loop(h, ctx, regs, i, self.tau, self.hard, generator)
-            trace.append(probs["op"])
+            trace.append(probs if full_trace else probs["op"])
         return self.norm(h) @ self.embed.weight.t(), trace
 
-    def loss(self, x: torch.Tensor, mask: torch.Tensor, lb_weight: float = 0.01, generator=None):
-        logits, trace = self(x[:, :-1], generator=generator)
+    def op_targets(self, groups: list[tuple[set[str], ...] | None]) -> torch.Tensor:
+        """Per example, the expected op group for each loop -> multi-hot (B, n_loops, n_ops). Group j supervises
+        loop j; later loops and examples with None stay all-False (unsupervised)."""
+        t = torch.zeros(len(groups), self.n_loops, len(self.ops), dtype=torch.bool)
+        for b, gs in enumerate(groups):
+            for j, g in enumerate((gs or ())[: self.n_loops]):
+                for k, op in enumerate(self.ops):
+                    t[b, j, k] = op in g
+        return t
+
+    def loss(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor,
+        lb_weight: float = 0.01,
+        generator=None,
+        op_targets: torch.Tensor | None = None,
+        router_weight: float = 1.0,
+    ):
+        """Masked next-byte CE + load balance. With op_targets (B, n_loops, n_ops) from `op_targets`, adds a
+        teacher-forcing term on the router: -log P(op in expected group) at the trained (answer) positions."""
+        logits, trace = self(x[:, :-1], generator=generator, full_trace=True)
         ce = F.cross_entropy(logits.flatten(0, 1), x[:, 1:].flatten(), reduction="none")
         w = mask.flatten()
         loss = (ce * w).sum() / w.sum().clamp_min(1)
-        lb = torch.stack([self.loop.load_balance(p) for p in trace]).mean()
-        info = {"ce": loss.item(), "load_balance": lb.item(), "tau": self.tau}
-        return loss + lb_weight * lb if len(self.ops) > 1 else loss, info
+        info = {"ce": loss.item(), "tau": self.tau}
+        if len(self.ops) == 1:
+            return loss, info
+        lb = torch.stack([self.loop.load_balance(p["op"]) for p in trace]).mean()
+        info["load_balance"] = lb.item()
+        total = loss + lb_weight * lb
+        if op_targets is not None:
+            terms = []
+            for i, p in enumerate(trace):
+                allowed = op_targets[:, i]  # (B, n_ops)
+                sel = mask.bool() & allowed.any(-1, keepdim=True)  # (B, T) supervised positions
+                if sel.any():
+                    lp = p["op_logp"].masked_fill(~allowed[:, None, :], float("-inf")).logsumexp(-1)
+                    terms.append(-lp[sel].mean())
+            if terms:
+                rl = torch.stack(terms).mean()
+                info["router_ce"] = rl.item()
+                total = total + router_weight * rl
+        return total, info
 
     @torch.no_grad()
     def complete(self, prompt: bytes, max_bytes: int = 40, n_loops: int | None = None) -> tuple[str, list[str]]:

@@ -138,6 +138,7 @@ class OperatorLoop(nn.Module):
             h = h + torch.sigmoid(self.gate(h)) * self.write(new_vec)
         h = h + self.mlp(h)
         probs = {"op": p_op, "set_in": p_sin, "vec_in": p_vin, "set_dst": p_sdst, "vec_dst": p_vdst}
+        probs["op_logp"] = parts[0].log_softmax(-1)  # noise-free router log-probs (for supervised warm-up)
         return h, (sets, vecs), probs
 
     def load_balance(self, p_op: torch.Tensor) -> torch.Tensor:

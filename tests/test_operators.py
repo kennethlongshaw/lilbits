@@ -54,3 +54,23 @@ def test_count_op_counts_set_positions():
     z = torch.zeros(1, 4, 8)
     _, (_, vecs), _ = loop(z, z, ([S, S], [z, z]), 0, hard=True)
     assert vecs[0][0, 3, 0].item() == 3.0 or vecs[1][0, 3, 0].item() == 3.0
+
+
+def test_router_teacher_forcing_pulls_loop_toward_expected_ops():
+    from lilbits.models.op_loop import OpLoopLM
+    from lilbits.shakespeare import segment_tensors
+
+    torch.manual_seed(0)
+    m = OpLoopLM(32, 2)
+    t = m.op_targets([({"filter"}, {"count"}), None])
+    assert t.shape == (2, 2, len(m.ops)) and t[0, 0, m.ops.index("filter")] and not t[1].any()
+    x, mk = segment_tensors([[(b"COUNT A: A, B =>", False), (b" 1\n", True)]] * 2, 24)
+    opt = torch.optim.Adam(m.parameters(), lr=1e-2)
+    first = None
+    for _ in range(15):
+        loss, info = m.loss(x, mk, op_targets=t, router_weight=5.0)
+        first = first if first is not None else info["router_ce"]
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    assert info["router_ce"] < 0.5 * first
