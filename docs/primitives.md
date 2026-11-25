@@ -72,3 +72,17 @@ The whole design is assembled in `models/looped_index.py` (`LoopedIndexLM`) and 
 
 Every stage needs a long-context recall / multi-hop synthetic task to be measurable, so that task
 generator should come first.
+
+## Beyond the lean decoder
+
+| primitive | what it is | status | where |
+|---|---|---|---|
+| Pocket LM | bytes → exact byte-pair router (space-patching init, capped patches) → the looped index body once per patch → byte decoder, MTP byte drafts with exact verify; every piece a switch | ✅ decode 1.2× (14 MiB) to 1.9× (53 MiB) faster than an FP16 byte LM of equal deployed size with ~6× the parameters; slower at 4 MiB; prefill 4–6× and training 6–12× costlier; quality unmeasured (`results/pocket_bench.md`) | `models/pocket.py`, `examples/10_pocket_lm.py`, `benchmarks/pocket_bench.py` |
+| Energy-based thinking | predict by gradient descent on candidate logits under a learned energy (after Energy-Based Transformers, 2025); random steps / step size, Langevin noise, self-verification; GDN backbone once, small energy head per step | ✅ mechanics (energy falls per step; decode 1.5× / 2.5× / 3.8× slower than a plain LM at 1 / 4 / 8 steps) | `models/energy.py`, `examples/11_energy_thinking.py` |
+| Operator loop | each loop one routed instruction: typed query ops (filter, point, topk, sum, mean, max, count, attend, mix, noop) over the context and per-position SET / VEC registers; Gumbel-soft → hard; op traces; load balance | ✅ mechanics; all ops are computed in soft training (about 10× an attention-only loop) | `mixers/operators.py`, `models/op_loop.py`, `examples/13_operator_loop.py` |
+| Post-training | sequence log-probs, sampling, GRPO (group-normalized advantages, KL to reference), DPO | ✅ | `training/preference.py`, `examples/12_shakespeare_tasks.py` |
+| Toy Shakespeare data | tiny-shakespeare bytes, 4,400 exactly scored QA pairs, needle / copy / sort / count / who-said / who-answers tasks, a search / next tool over the corpus, DPO pairs | ✅ | `shakespeare.py`, `data/shakespeare/` |
+
+Faster decode for every looped model: `LoopScaledLinear` caches its folded ±1 factors in eval (no re-binarizing per
+call), size-1 `ShortConv` is a per-channel scale, and LUT prefill uses low-rank matmuls over signs unpacked once
+(no dense FP32 weight per loop). Body step at d=512: 61 → 8 ms.
