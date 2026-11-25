@@ -1,0 +1,44 @@
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+== train ==
+  lean                             {fp_phase: {steps: 45, last_loss: 3.161, ce: 2.224, mtp_ce: 3.125, loss_curve: [6.2393878698349, 4.255335569381714, 3.838090419769287, 3.7140079736709595, 3.587241291999817, 3.499589502811432, 3.408852696418762, 3.367858409881592, 3.2859005331993103, 3.290791630744934]}, converted_layers: 32, convert_s: 1.326, steps: 105, last_loss: 2.928, ce: 2.028, mtp_ce: 3.001, loss_curve: [3.676345372200012, 3.358507180213928, 3.305631732940674, 3.235813117027283, 3.1720277070999146, 3.1349636793136595, 3.0743599414825438, 3.046274256706238, 3.024569535255432, 3.0306004524230956], wall_s: 126.8, cpu_s: 138, cpu_util: 1.088, peak_extra_mib: 831.2, width: 256}
+  fp16_size                        {steps: 150, last_loss: 2.101, ce: 2.101, loss_curve: [4.777283986409505, 3.1276601950327554, 2.6827812512715656, 2.497909339269002, 2.3755109151204428, 2.304112180074056, 2.2358908653259277, 2.1769000848134357, 2.1479326089223227, 2.1326419353485107], wall_s: 30.65, cpu_s: 33.4, cpu_util: 1.09, peak_extra_mib: 238.9, width: 68}
+  fp16_width                       {steps: 150, last_loss: 1.743, ce: 1.743, loss_curve: [3.626194206873576, 2.4298275152842206, 2.2696336110432944, 2.167529503504435, 2.0897257407506307, 2.0157193422317503, 1.9487101872762045, 1.8872729380925497, 1.8624763250350953, 1.8265001058578492], wall_s: 139.2, cpu_s: 151.5, cpu_util: 1.088, peak_extra_mib: 791.5, width: 256}
+  wall_s                           297.2
+  cpu_s                            323.4
+  cpu_util                         1.088
+  peak_extra_mib                   845.2
+
+== test ==
+  lean                             {bpb: 3.073}
+  fp16_size                        {bpb: 3.101}
+  fp16_width                       {bpb: 2.759}
+  wall_s                           4.717
+  cpu_s                            4.948
+  cpu_util                         1.049
+  peak_extra_mib                   74.24
+
+== infer ==
+  lut_kernel                       {compiled: True, simd: 512}
+  threads                          1
+  lean                             {packed_lut_bpb: 3.091, prefill_bytes_per_s: 6509, greedy_ms_per_byte: 3.321, speculative_ms_per_byte: 4.452, speculative_speedup: 0.746, speculative_equals_greedy: True, rounds: 128, model_calls: 256, bytes_per_call: 1, draft_acceptance: 0.3333, state_bytes: 262144, attention_kv_bytes_same_length_fp16: 3145728, sample: S:
+The the the the the the the the the the the the the the t, wall_s: 2.739, cpu_s: 2.967, cpu_util: 1.083, peak_extra_mib: 67.57}
+  fp16_size                        {prefill_bytes_per_s: 2.289e+04, greedy_ms_per_byte: 1.905, state_bytes: 18496, attention_kv_bytes_same_length_fp16: 835584, sample: S:
+The the the the the the the the the the the the the the t, wall_s: 0.5207, cpu_s: 0.5584, cpu_util: 1.072, peak_extra_mib: 5.914}
+  fp16_width                       {prefill_bytes_per_s: 5695, greedy_ms_per_byte: 3.079, state_bytes: 262144, attention_kv_bytes_same_length_fp16: 3145728, sample: S:
+Where the the the the the the the the the the the the the, wall_s: 0.8997, cpu_s: 0.9493, cpu_util: 1.055, peak_extra_mib: 12.56}
+  wall_s                           4.672
+  cpu_s                            4.989
+  cpu_util                         1.068
+  peak_extra_mib                   67.62
+
+== size ==
+  lean                             {params: 128544, weight_ram_bytes: 805888, deployed_bytes: 5.488e+05}
+  fp16_size                        {params: 257208, weight_ram_bytes: 1028832, deployed_bytes: 5.144e+05}
+  fp16_width                       {params: 3479072, weight_ram_bytes: 13916288, deployed_bytes: 6.958e+06}
+  checkpoint_file_bytes            20337399
+METRICS {"example": "14_lean_lm", "mode": "all", "train": {"lean": {"fp_phase": {"steps": 45, "last_loss": 3.1611487865448, "ce": 2.2237300872802734, "mtp_ce": 3.1247289180755615, "loss_curve": [6.2393878698349, 4.255335569381714, 3.838090419769287, 3.7140079736709595, 3.587241291999817, 3.499589502811432, 3.408852696418762, 3.367858409881592, 3.2859005331993103, 3.290791630744934]}, "converted_layers": 32, "convert_s": 1.3264141459999905, "steps": 105, "last_loss": 2.928034543991089, "ce": 2.0278100967407227, "mtp_ce": 3.0007479190826416, "loss_curve": [3.676345372200012, 3.358507180213928, 3.305631732940674, 3.235813117027283, 3.1720277070999146, 3.1349636793136595, 3.0743599414825438, 3.046274256706238, 3.024569535255432, 3.0306004524230956], "wall_s": 126.844808763, "cpu_s": 137.974567952, "cpu_util": 1.0877431193088487, "peak_extra_mib": 831.21875, "width": 256}, "fp16_size": {"steps": 150, "last_loss": 2.1011645793914795, "ce": 2.1011645793914795, "loss_curve": [4.777283986409505, 3.1276601950327554, 2.6827812512715656, 2.497909339269002, 2.3755109151204428, 2.304112180074056, 2.2358908653259277, 2.1769000848134357, 2.1479326089223227, 2.1326419353485107], "wall_s": 30.64584023699996, "cpu_s": 33.39776814300001, "cpu_util": 1.0897977632434934, "peak_extra_mib": 238.8828125, "width": 68}, "fp16_width": {"steps": 150, "last_loss": 1.7434262037277222, "ce": 1.7434262037277222, "loss_curve": [3.626194206873576, 2.4298275152842206, 2.2696336110432944, 2.167529503504435, 2.0897257407506307, 2.0157193422317503, 1.9487101872762045, 1.8872729380925497, 1.8624763250350953, 1.8265001058578492], "wall_s": 139.23063452099996, "cpu_s": 151.53351602800004, "cpu_util": 1.088363322837148, "peak_extra_mib": 791.453125, "width": 256}, "wall_s": 297.245103367, "cpu_s": 323.434160703, "cpu_util": 1.088105933585944, "peak_extra_mib": 845.2109375}, "test": {"lean": {"bpb": 3.073197845246865}, "fp16_size": {"bpb": 3.10112537699421}, "fp16_width": {"bpb": 2.7588754732239615}, "wall_s": 4.716916616999924, "cpu_s": 4.9475507490000155, "cpu_util": 1.048895104731951, "peak_extra_mib": 74.23828125}, "infer": {"lut_kernel": {"compiled": true, "simd": 512}, "threads": 1, "lean": {"packed_lut_bpb": 3.0910096154444364, "prefill_bytes_per_s": 6508.912659184685, "greedy_ms_per_byte": 3.3214252109377007, "speculative_ms_per_byte": 4.452015554687883, "speculative_speedup": 0.7460497768118324, "speculative_equals_greedy": true, "rounds": 128, "model_calls": 256, "bytes_per_call": 1.0, "draft_acceptance": 0.3333333333333333, "state_bytes": 262144, "attention_kv_bytes_same_length_fp16": 3145728, "sample": "S:\nThe the the the the the the the the the the the the the t", "wall_s": 2.7390446439999323, "cpu_s": 2.966909208000004, "cpu_util": 1.0831912559363444, "peak_extra_mib": 67.5703125}, "fp16_size": {"prefill_bytes_per_s": 22886.691210288845, "greedy_ms_per_byte": 1.904886660156091, "state_bytes": 18496, "attention_kv_bytes_same_length_fp16": 835584, "sample": "S:\nThe the the the the the the the the the the the the the t", "wall_s": 0.5206866150000451, "cpu_s": 0.5583838559999776, "cpu_util": 1.0723990974877071, "peak_extra_mib": 5.9140625}, "fp16_width": {"prefill_bytes_per_s": 5695.198282672456, "greedy_ms_per_byte": 3.0786800976563278, "state_bytes": 262144, "attention_kv_bytes_same_length_fp16": 3145728, "sample": "S:\nWhere the the the the the the the the the the the the the", "wall_s": 0.899733920000017, "cpu_s": 0.9493315210000333, "cpu_util": 1.0551247428795565, "peak_extra_mib": 12.55859375}, "wall_s": 4.672053521000066, "cpu_s": 4.989093773000036, "cpu_util": 1.0678588656090795, "peak_extra_mib": 67.625}, "size": {"lean": {"params": 128544, "weight_ram_bytes": 805888, "deployed_bytes": 548800.0}, "fp16_size": {"params": 257208, "weight_ram_bytes": 1028832, "deployed_bytes": 514416.0}, "fp16_width": {"params": 3479072, "weight_ram_bytes": 13916288, "deployed_bytes": 6958144.0}, "checkpoint_file_bytes": 20337399}}
+
+real	5m12.054s
+user	5m29.533s
+sys	0m9.918s

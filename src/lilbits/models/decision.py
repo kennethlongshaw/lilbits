@@ -33,8 +33,8 @@ class StatefulBlock(nn.Module):
         self.mixer = MIXERS[mixer](d_model, n_heads, linear, **kw)
         self.mlp = SwiGLU(d_model, int(d_model * 8 / 3) // 8 * 8, mlp_linear or linear)
 
-    def forward(self, x: torch.Tensor, state=None):
-        y, state = self.mixer(self.n1(x), initial_state=state, return_state=True)
+    def forward(self, x: torch.Tensor, state=None, **mixer_kw):
+        y, state = self.mixer(self.n1(x), initial_state=state, return_state=True, **mixer_kw)
         x = x + y
         return x + self.mlp(self.n2(x)), state
 

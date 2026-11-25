@@ -47,22 +47,25 @@ class ShortConv(nn.Module):
         return F.silu(y).transpose(1, 2)
 
 
-def gated_delta_rule(q, k, v, g, beta, initial_state=None):
+def gated_delta_rule(q, k, v, g, beta, initial_state=None, all_states: bool = False):
     """Naive recurrent gated delta rule.
 
     q, k: (B, T, H, Dk), unit-norm k; v: (B, T, H, Dv); g (log decay, <= 0), beta: (B, T, H).
-    Returns o (B, T, H, Dv) and the final state (B, H, Dk, Dv).
+    Returns o (B, T, H, Dv) and the final state (B, H, Dk, Dv), or with all_states the state after every token
+    (B, T, H, Dk, Dv): speculative verify keeps the state at any accepted prefix without replaying it.
     """
     B, T, H, Dk = k.shape
     S = q.new_zeros(B, H, Dk, v.shape[-1]) if initial_state is None else initial_state
-    out = []
+    out, states = [], []
     for t in range(T):
         S = S * g[:, t].exp()[..., None, None]
         kt = k[:, t]
         delta = (v[:, t] - torch.einsum("bhkv,bhk->bhv", S, kt)) * beta[:, t, :, None]
         S = S + torch.einsum("bhk,bhv->bhkv", kt, delta)
         out.append(torch.einsum("bhkv,bhk->bhv", S, q[:, t]))
-    return torch.stack(out, dim=1), S
+        if all_states:
+            states.append(S)
+    return torch.stack(out, dim=1), torch.stack(states, dim=1) if all_states else S
 
 
 def chunk_gated_delta_rule(q, k, v, g, beta, initial_state=None, chunk: int = 64):
@@ -137,7 +140,9 @@ class GatedDeltaNet(nn.Module):
         self.o_norm = nn.RMSNorm(self.head_dim)
         self.chunk_min = 16  # sequences at least this long use the chunked rule; shorter (decode) the naive loop
 
-    def forward(self, x: torch.Tensor, initial_state=None, return_state: bool = False):
+    def forward(self, x: torch.Tensor, initial_state=None, return_state: bool = False, all_states: bool = False):
+        """all_states (with return_state): the returned state is the state after every token, (B, T, H, Dk, Dv),
+        from the naive rule (meant for short verify calls)."""
         B, T, C = x.shape
         H, D = self.n_heads, self.head_dim
 
@@ -149,8 +154,11 @@ class GatedDeltaNet(nn.Module):
         v = heads(self.conv_v(self.v(x)))
         beta = torch.sigmoid(self.b(x))
         g = -self.A_log.exp() * F.softplus(self.a(x) + self.dt_bias)
-        rule = chunk_gated_delta_rule if T >= self.chunk_min else gated_delta_rule
-        o, S = rule(q, k, v, g, beta, initial_state)
+        if all_states:
+            o, S = gated_delta_rule(q, k, v, g, beta, initial_state, all_states=True)
+        else:
+            rule = chunk_gated_delta_rule if T >= self.chunk_min else gated_delta_rule
+            o, S = rule(q, k, v, g, beta, initial_state)
         o = self.o_norm(o) * F.silu(heads(self.gate(x)))
         out = self.o(o.reshape(B, T, C))
         return (out, S) if return_state else out
