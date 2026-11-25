@@ -14,6 +14,10 @@ Each piece can be turned off, so a benchmark can say what each one costs or save
 The comparison model, `fp16_same_size`, is a byte-level GDN LM in FP16 whose deployed bytes match the pocket model's
 (width searched at build time), trained on the same bytes for the same number of steps.
 
+Data: the tiny-shakespeare bytes (train split: the first 90% of speeches), then an instruct stage on Shakespeare
+QA pairs with the loss on answer bytes only (data/shakespeare). Test: bits per byte on held-out speeches and exact
+match on held-out QA pairs, for both models.
+
 Training is a smoke run (a few steps) that proves the code works: bits per byte here say nothing about which model
 is better. What the run does measure: deployed bytes, checkpoint size, RAM, train step cost, decode speed and its
 split between the byte layers and the body, and whether speculative decode reproduces greedy decode.
@@ -25,31 +29,21 @@ split between the byte layers and the body, and whether speculative decode repro
 from __future__ import annotations
 
 import copy
-import glob
 import math
 import os
-from functools import partial
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from lilbits.data import ByteSource
 from lilbits.inference.lut import pack_lut
 from lilbits.measure import Meter, size_report
-from lilbits.models.pocket import PocketConfig, PocketLM, convert_pocket_core
-from lilbits.models.stateful_lm import StatefulLM, state_bytes
+from lilbits.models.pocket import PocketConfig, PocketLM, convert_pocket_core, fp16_baseline, matched_fp16_width
+from lilbits.models.stateful_lm import state_bytes
 from lilbits.runner import Example, fit, run
+from lilbits.shakespeare import ShakespeareBytes, exact_match, load_qa, prompt_bytes, qa_tensors
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def files() -> list[str]:
-    return sorted(
-        glob.glob(os.path.join(ROOT, "*.md"))
-        + glob.glob(os.path.join(ROOT, "docs", "*.md"))
-        + glob.glob(os.path.join(ROOT, "src", "**", "*.py"), recursive=True)
-    )
 
 
 def add_args(ap):
@@ -65,6 +59,8 @@ def add_args(ap):
     ap.add_argument("--scale-bits", type=int, default=8, choices=[8, 16])
     ap.add_argument("--no-index", action="store_true")
     ap.add_argument("--mtp", type=int, default=2)
+    ap.add_argument("--qa-steps", type=int, default=4, help="instruct stage: steps on Shakespeare QA pairs")
+    ap.add_argument("--qa-eval", type=int, default=16, help="test: held-out QA pairs scored by exact match")
     ap.add_argument("--prompt", type=int, default=128, help="infer: prompt bytes")
     ap.add_argument("--gen", type=int, default=64, help="infer: bytes to decode")
     ap.add_argument("--kernel", default="native", choices=["native", "lut"])
@@ -87,21 +83,6 @@ def deployed(m: nn.Module) -> float:
     return size_report(m)["deployed_total_bytes"]
 
 
-def baseline(d: int) -> StatefulLM:
-    return StatefulLM(256, d, d // 64, 2, partial(nn.Linear, bias=False), mixer="gdn")
-
-
-def matched_width(target_bytes: float) -> int:
-    """Width (multiple of 64, head dim 64) of the 2-layer FP16 byte GDN LM deployed closest to target_bytes."""
-    best, best_gap = 64, math.inf
-    for d in range(64, 4097, 64):
-        with torch.device("meta"):
-            gap = abs(deployed(baseline(d)) - target_bytes)
-        if gap < best_gap:
-            best, best_gap = d, gap
-    return best
-
-
 def build(args, meta):
     """Training builds the FP-core model (stage 1); a checkpoint's meta says whether the core was converted."""
     torch.manual_seed(args.seed)
@@ -114,17 +95,22 @@ def build(args, meta):
         final = copy.deepcopy(pocket)
         if args.core == "littlebit":
             convert_pocket_core(final)
-        d = matched_width(deployed(final))
-    return {"pocket": pocket, "fp16_same_size": baseline(d)}
+        d = matched_fp16_width(deployed(final))
+    return {"pocket": pocket, "fp16_same_size": fp16_baseline(d)}
 
 
-def baseline_loss(m: nn.Module, x):
+def baseline_loss(m: nn.Module, x, mask=None):
     logits, _ = m(x[:, :-1])
-    return F.cross_entropy(logits.flatten(0, 1), x[:, 1:].flatten()), {}
+    ce = F.cross_entropy(logits.flatten(0, 1), x[:, 1:].flatten(), reduction="none")
+    if mask is None:
+        return ce.mean(), {}
+    w = mask.flatten()
+    return (ce * w).sum() / w.sum().clamp_min(1), {}
 
 
 def train_fn(models, args, fab):
-    src = ByteSource(files(), seed=args.seed)
+    src = ShakespeareBytes("train", seed=args.seed)
+    qa = load_qa("train")
     pocket = models["pocket"]
     out: dict = {}
     stages = [("1 FP core", False)] + ([("2 LittleBit core", True)] if args.core == "littlebit" else [])
@@ -141,12 +127,21 @@ def train_fn(models, args, fab):
                 lr=2e-3,
             )
         out[f"pocket: {name}"] = {**info, **m.as_dict(), "step_ms": m.wall_s / max(1, args.steps) * 1e3}
+
+    def qa_batch(i):
+        return qa_tensors([qa[(i * args.batch + j) % len(qa)] for j in range(args.batch)], args.seq)
+
+    with Meter() as m:  # instruct stage: loss on answer bytes only
+        info = fit(fab, pocket, qa_batch, lambda mod, b: pocket.training_loss(b[0], mask=b[1]), args.qa_steps, lr=1e-3)
+    out["pocket: 3 QA instruct"] = {**info, **m.as_dict()}
     steps = args.steps * len(stages)
+    base = models["fp16_same_size"]
     with Meter() as m:
-        info = fit(
-            fab, models["fp16_same_size"], lambda _: src.sample(args.batch, args.seq), baseline_loss, steps, lr=2e-3
-        )
+        info = fit(fab, base, lambda _: src.sample(args.batch, args.seq), baseline_loss, steps, lr=2e-3)
     out["fp16_same_size"] = {**info, **m.as_dict(), "step_ms": m.wall_s / max(1, steps) * 1e3}
+    with Meter() as m:
+        info = fit(fab, base, qa_batch, lambda mod, b: baseline_loss(mod, b[0], b[1]), args.qa_steps, lr=1e-3)
+    out["fp16_same_size: QA instruct"] = {**info, **m.as_dict()}
     return out, {
         "core_converted": args.core == "littlebit",
         "baseline_d": models["fp16_same_size"].embed.weight.shape[1],
@@ -154,11 +149,24 @@ def train_fn(models, args, fab):
 
 
 def held_out(args) -> torch.Tensor:
-    return ByteSource(files(), seed=123).sample(8, args.seq)
+    return ShakespeareBytes("test", seed=123).sample(8, args.seq)
+
+
+def answerer(generate, max_bytes: int = 48):
+    """Greedy answer to a QA prompt: bytes up to the first newline."""
+
+    def answer(q: str) -> str:
+        p = torch.tensor(list(prompt_bytes(q)))[None]
+        out = generate(p, max_bytes)
+        gen = bytes(out[0, p.shape[1] :].tolist())
+        return gen.split(b"\n")[0].decode(errors="replace")
+
+    return answer
 
 
 def test_fn(models, args):
     x = held_out(args)
+    pairs = load_qa("test")[: args.qa_eval]
     y, aux = models["pocket"](x, models["pocket"].new_cache(x.shape[0]))
     pl = F.cross_entropy(models["pocket"].logits(y[:, :-1]).flatten(0, 1), x[:, 1:].flatten()).item()
     bl, _ = baseline_loss(models["fp16_same_size"], x)
@@ -168,7 +176,11 @@ def test_fn(models, args):
             "bytes_per_patch": aux["b"].numel() / max(1, int(aux["b"].sum())),
         },
         "fp16_same_size": {"bits_per_byte": bl.item() / math.log(2), "bytes_per_patch": 1.0},
-        "note": "smoke-trained: bits per byte do not rank the models",
+        "qa_exact_match": {
+            "pocket": exact_match(answerer(lambda p, n: models["pocket"].generate(p, n)[0]), pairs),
+            "fp16_same_size": exact_match(answerer(lambda p, n: models["fp16_same_size"].generate(p, n)[0]), pairs),
+        },
+        "note": "smoke-trained: bits per byte and exact match do not rank the models",
     }
 
 

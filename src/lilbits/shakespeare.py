@@ -132,7 +132,7 @@ def prompt_bytes(q: str) -> bytes:
 
 
 def qa_tensors(pairs: list[dict], seq: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """Rows of "Q: q\\nA: a\\n" bytes, right-padded with newlines to seq + 1, and a mask (B, seq) that is 1 where
+    """Rows of "Q: q\\nA: a\\n" bytes, right-padded with NUL bytes to seq + 1, and a mask (B, seq) that is 1 where
     the target byte (x[:, 1:]) belongs to the answer (including its closing newline). Long questions are cut
     from the left so the answer always fits."""
     rows, masks = [], []
@@ -142,7 +142,7 @@ def qa_tensors(pairs: list[dict], seq: int) -> tuple[torch.Tensor, torch.Tensor]
         b = pr + ans
         m = [0] * (len(pr) - 1) + [1] * len(ans)
         pad = seq + 1 - len(b)
-        rows.append(list(b) + [10] * pad)
+        rows.append(list(b) + [0] * pad)
         masks.append(m + [0] * pad)
     return torch.tensor(rows), torch.tensor(masks, dtype=torch.float)
 

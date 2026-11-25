@@ -24,17 +24,21 @@ patch's output, so byte t only sees bytes <= t, and streaming decode computes wh
 
 from __future__ import annotations
 
+import math
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
+from lilbits.measure import size_report
 from lilbits.models.byte_latent import DynamicChunker
 from lilbits.models.decision import StatefulBlock
 from lilbits.models.looped_index import Cache, LoopedIndexConfig, LoopedIndexLM, MTPHead, convert_core_to_littlebit
+from lilbits.models.stateful_lm import StatefulLM
 
 N_BYTES = 256
 SEPARATORS = b" \t\n\r"  # a patch opens at the first byte after whitespace (BLT-style space patching)
@@ -252,10 +256,17 @@ class PocketLM(nn.Module):
 
     # ---- training -------------------------------------------------------------------------------------
 
-    def training_loss(self, x: torch.Tensor, mtp: bool = True):
-        """Next-byte loss + ratio loss (learned routers) + MTP losses. x: (B, T) bytes."""
+    def training_loss(self, x: torch.Tensor, mtp: bool = True, mask: torch.Tensor | None = None):
+        """Next-byte loss + ratio loss (learned routers) + MTP losses. x: (B, T) bytes. mask (B, T - 1): weight
+        per target byte (e.g. answer bytes only for instruct tuning); MTP losses are then skipped."""
         y, aux = self(x, self.new_cache(x.shape[0]))
-        loss = F.cross_entropy(self.logits(y[:, :-1]).flatten(0, 1), x[:, 1:].flatten())
+        ce = F.cross_entropy(self.logits(y[:, :-1]).flatten(0, 1), x[:, 1:].flatten(), reduction="none")
+        if mask is None:
+            loss = ce.mean()
+        else:
+            m = mask.flatten().to(ce)
+            loss = (ce * m).sum() / m.sum().clamp_min(1)
+            mtp = False
         info = {"lm": loss.item(), "bytes_per_patch": aux["b"].numel() / max(1, int(aux["b"].sum()))}
         if self.cfg.router != "none":
             r = DynamicChunker.ratio_loss(aux["p"], aux["b"], self.cfg.target_ratio)
@@ -346,10 +357,34 @@ class PocketLM(nn.Module):
         return torch.cat([prompt, gen], 1), stats
 
 
+def fp16_baseline(d: int) -> StatefulLM:
+    """The comparison model: a 2-layer byte-level FP GDN LM (head dim 64), deployed in FP16."""
+    return StatefulLM(N_BYTES, d, d // 64, 2, partial(nn.Linear, bias=False), mixer="gdn")
+
+
+def matched_fp16_width(target_bytes: float) -> int:
+    """Width (multiple of 64) of `fp16_baseline` whose deployed size is closest to target_bytes."""
+    best, best_gap = 64, math.inf
+    for d in range(64, 8193, 64):
+        with torch.device("meta"):
+            gap = abs(size_report(fp16_baseline(d))["deployed_total_bytes"] - target_bytes)
+        if gap < best_gap:
+            best, best_gap = d, gap
+    return best
+
+
 def convert_pocket_core(model: PocketLM, ranks: dict[str, int] | None = None) -> None:
     """Stage 2: the body's FP looped core -> sub-1-bit LittleBit (Dual-SVID from the FP weights), per-loop scales
     kept, base scales at cfg.scale_bits."""
     convert_core_to_littlebit(model.body, ranks=ranks)
 
 
-__all__ = ["PairRouter", "PocketCache", "PocketConfig", "PocketLM", "convert_pocket_core"]
+__all__ = [
+    "PairRouter",
+    "PocketCache",
+    "PocketConfig",
+    "PocketLM",
+    "convert_pocket_core",
+    "fp16_baseline",
+    "matched_fp16_width",
+]
