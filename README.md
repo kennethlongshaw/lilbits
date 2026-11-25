@@ -21,7 +21,7 @@ GDN baseline, pocket, looped index, operator loop; add one with a small adapter)
 deployed sizes, varying width, depth, loop count and bpw one knob at a time. Each point records params, deployed
 and on-disk bytes, a short-run bits per byte, train step time, CPU, peak RAM, prefill and decode speed, and
 inference RAM. It fits power laws per curve and reports the FP16 crossovers in `results/scaling/` (md, json, png).
-`--match params` sweeps at equal parameter count instead of equal bytes. The default is smoke scale (0.5 / 1 / 2 MiB, 20 steps, about 15 minutes on one core).
+`--match params` or `--match flops` sweeps at equal parameter count or equal forward compute per byte instead of equal bytes; `--seeds N` averages losses over seeds; workers are pinned to one core and wait for a quiet machine (`--max-load`), and busy points are flagged. The default is smoke scale (0.5 / 1 / 2 MiB, 20 steps, about 15 minutes on one core).
 
 It started as a prototype of LittleBit trained **from scratch** (no pretrained teacher, no distillation). The
 results below come from that work. References: Lee et al., *LittleBit: Ultra Low-Bit Quantization via Latent

@@ -23,7 +23,8 @@ Families (add one by writing a `Family` adapter; nothing else changes):
     oploop    examples/13 OpLoopLM (routed operators over context + registers, FP); knob: loops
 
     uv run python benchmarks/scaling.py                                  # smoke: 3 sizes, every family
-    uv run python benchmarks/scaling.py --families fp16,pocket --sizes 1,2,4,8 --steps 200
+    uv run python benchmarks/scaling.py --families fp16,pocket --sizes 1,2,4,8 --steps 200 --seeds 3
+    uv run python benchmarks/scaling.py --match flops --sizes 5,10,20     # equal compute per byte
 """
 
 from __future__ import annotations
@@ -49,7 +50,12 @@ from torch import nn
 
 ROOT = Path(__file__).resolve().parent.parent
 MiB = 2**20
-MATCH = {"bytes": ("deployed MiB", "deployed_bytes", MiB), "params": ("M params", "params", 1e6)}
+MATCH = {
+    "bytes": ("deployed MiB", "deployed_bytes", MiB),
+    "params": ("M params", "params", 1e6),
+    "flops": ("MFLOP / byte", "mflops_per_byte", 1.0),  # forward compute per byte of text (equal-compute view)
+}
+CACHE_KEY = {"bytes": "bytes", "params": "params", "flops": "flops"}
 AXIS = "bytes"  # set by --match: what the size grid and every fit / crossover is measured in
 
 
@@ -248,15 +254,35 @@ def label(fam: str, knobs: dict) -> str:
 # ---- sizing -------------------------------------------------------------------------------------------------
 
 
-def model_size(fam: Family, width: int, knobs: dict) -> tuple[int, int]:
-    """(deployed bytes, params) of the deployable model at this width."""
+def forward_mflops_per_byte(fam: Family, m: nn.Module) -> float:
+    """Forward FLOPs per byte on real text (256 held-out bytes), counted by torch's FLOP counter. Data-dependent
+    paths (byte patching) run at the rate real text gives."""
+    from torch.utils.flop_counter import FlopCounterMode
+
+    from lilbits.shakespeare import ShakespeareBytes
+
+    x = ShakespeareBytes("test", seed=7).sample(1, 256)
+    was = m.training
+    m.eval()
+    with torch.no_grad(), FlopCounterMode(display=False) as fc:
+        (fam.eval_ce or fam.loss)(m, x)
+    m.train(was)
+    return fc.get_total_flops() / x.shape[1] / 1e6
+
+
+def model_size(fam: Family, width: int, knobs: dict) -> tuple[int, int, float]:
+    """(deployed bytes, params, forward MFLOP per byte) of the deployable model at this width."""
     from lilbits.measure import size_report
 
     torch.manual_seed(0)
     m = fam.build(width, **knobs)
     if fam.stage2:
         fam.stage2(m)
-    return size_report(m)["deployed_total_bytes"], sum(p.numel() for p in m.parameters())
+    return (
+        size_report(m)["deployed_total_bytes"],
+        sum(p.numel() for p in m.parameters()),
+        forward_mflops_per_byte(fam, m),
+    )
 
 
 def solve_width(fam: Family, knobs: dict, target_mib: float, cache: dict) -> int | None:
@@ -264,11 +290,11 @@ def solve_width(fam: Family, knobs: dict, target_mib: float, cache: dict) -> int
     target. Both are quadratic in width at fixed knobs, so three small real builds fit them exactly enough; None
     if out of range."""
     key = label(fam.name, knobs)
-    if "params" not in cache.get(key, {}):
+    if "flops" not in cache.get(key, {}):
         ws = [2 * fam.width_step, 4 * fam.width_step, 6 * fam.width_step]
         sizes = [model_size(fam, w, knobs) for w in ws]
-        cache[key] = {"w": ws, "bytes": [b for b, _ in sizes], "params": [n for _, n in sizes]}
-    ws, ys = cache[key]["w"], cache[key][AXIS]
+        cache[key] = {"w": ws, **{k: [z[i] for z in sizes] for i, k in enumerate(("bytes", "params", "flops"))}}
+    ws, ys = cache[key]["w"], cache[key][CACHE_KEY[AXIS]]
     target = target_mib * MATCH[AXIS][2]
 
     # quadratic through 3 points (Lagrange)
@@ -301,11 +327,13 @@ def worker(spec: dict) -> dict:
     from lilbits.shakespeare import ShakespeareBytes
 
     torch.set_num_threads(1)
+    if spec.get("cpu") is not None and hasattr(os, "sched_setaffinity"):
+        os.sched_setaffinity(0, {spec["cpu"]})  # pin to one core: timings don't hop between busy and idle cores
     fam, knobs, width = FAMILIES[spec["family"]], spec["knobs"], spec["width"]
-    steps, batch, seq = spec["steps"], spec["batch"], spec["seq"]
-    torch.manual_seed(0)
+    steps, batch, seq, seed = spec["steps"], spec["batch"], spec["seq"], spec.get("seed", 0)
+    torch.manual_seed(seed)
     model = fam.build(width, **knobs)
-    train = ShakespeareBytes("train", seed=0)
+    train = ShakespeareBytes("train", seed=seed)
     opt = torch.optim.AdamW(model.parameters(), lr=spec["lr"], weight_decay=0.0)
     warm = max(1, steps // 20)
 
@@ -346,6 +374,7 @@ def worker(spec: dict) -> dict:
     buf = io.BytesIO()
     torch.save(model.state_dict(), buf)
     out["disk_bytes"] = buf.tell()
+    out["mflops_per_byte"] = forward_mflops_per_byte(fam, model)
     model.eval()
     test = ShakespeareBytes("test", seed=1).sample(8, 256)
     with torch.no_grad():
@@ -378,6 +407,43 @@ def worker(spec: dict) -> dict:
     out["prefill_bytes_per_s"] = long.shape[1] / long_w
     out["infer_peak_rss_mib"] = mi.peak_extra_mib
     return out
+
+
+QUALITY = ("bpb", "eval_loss", "train_last_loss")
+
+
+def merge_seeds(runs: list[dict]) -> dict:
+    """One row from per-seed runs: quality metrics averaged (plus *_std), everything else the median."""
+    ok = [r for r in runs if "error" not in r]
+    if not ok:
+        return runs[0]
+    out: dict = {"seeds": len(ok)}
+    for k, v in ok[0].items():
+        vals = [r[k] for r in ok]
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            out[k] = v
+        elif k in QUALITY:
+            out[k] = statistics.mean(vals)
+            out[f"{k}_std"] = statistics.stdev(vals) if len(vals) > 1 else 0.0
+        else:
+            out[k] = statistics.median(vals)
+    return out
+
+
+def load_1m() -> float:
+    try:
+        return float(Path("/proc/loadavg").read_text().split()[0])
+    except OSError:
+        return 0.0
+
+
+def wait_for_quiet(max_load: float, timeout_s: float = 600) -> float:
+    """Wait until other work on the machine is below max_load (1-min load average, minus this sweep's own process)
+    or timeout_s passes; returns the load seen at start of the run."""
+    t0 = time.time()
+    while load_1m() - 1 > max_load and time.time() - t0 < timeout_s:
+        time.sleep(15)
+    return load_1m()
 
 
 def _run(spec: dict, env: dict) -> dict:
@@ -465,7 +531,8 @@ def report(rows: list[dict], an: dict, args) -> str:
     lines = [
         "# Scaling sweep",
         "",
-        f"Matched on {xunit()}: {args.sizes}. Short runs: {args.steps} steps x {args.batch} x {args.seq} bytes of "
+        f"Matched on {xunit()}: {args.sizes}. Seeds per point: {args.seeds}; workers pinned to core {args.cpu}. "
+        f"Short runs: {args.steps} steps x {args.batch} x {args.seq} bytes of "
         "Shakespeare, cosine; single-threaded CPU, one process per point. Smoke-scale: read slopes and orderings, "
         "not absolute bits per byte.",
         "",
@@ -483,11 +550,14 @@ def report(rows: list[dict], an: dict, args) -> str:
         lines.append(
             f"| {r['curve']} | {r['target_mib']} | {r['width']} | {r['params'] / 1e6:.2f}M | "
             f"{r['deployed_bytes'] / MiB:.2f} | {r['disk_bytes'] / MiB:.2f} | {r['train_last_loss']:.3f} | "
-            f"{r['eval_loss']:.3f} | {r['bpb']:.3f} | {r['train_step_ms']:.0f} | {r['train_wall_s']:.1f} | "
+            f"{r['eval_loss']:.3f} | {r['bpb']:.3f}{f' ± {r['bpb_std']:.3f}' if r.get('seeds', 1) > 1 else ''} | {r['train_step_ms']:.0f} | {r['train_wall_s']:.1f} | "
             f"{r['train_cpu_util']:.2f} | {r['train_peak_rss_mib']:.0f} | "
             f"{r['decode_ms_per_byte']:.2f} | {r['decode_cpu_ms_per_byte']:.2f} | {r['prefill_bytes_per_s']:.0f} | "
             f"{r['infer_peak_rss_mib']:.0f} |"
         )
+    noisy = [f"{r['curve']} @ {r['target_mib']}" for r in rows if r.get("load_1m", 0) - 1 > args.max_load]
+    if noisy:
+        lines += ["", f"Timings taken on a busy machine (load above {args.max_load} + 1): " + ", ".join(noisy)]
     if args.skipped:
         lines += ["", "Out of range (no width within 35% of the target): " + ", ".join(args.skipped)]
     lines += ["", f"## Fits (y = a * size^b, size in {xunit()})", ""]
@@ -562,6 +632,15 @@ def main(argv=None):
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--seq", type=int, default=128)
     ap.add_argument("--lr", type=float, default=2e-3)
+    ap.add_argument("--seeds", type=int, default=1, help="runs per point: losses averaged (with std), timings median")
+    ap.add_argument("--cpu", type=int, default=(os.cpu_count() or 1) - 1, help="core every worker is pinned to")
+    ap.add_argument(
+        "--max-load",
+        type=float,
+        default=1.0,
+        help="before each run, wait (up to 10 min) until the 1-min load average minus 1 (this sweep) is below it; "
+        "the load is recorded per point and the report flags noisy ones",
+    )
     ap.add_argument("--defaults-only", action="store_true", help="skip the one-knob-at-a-time variations")
     ap.add_argument("--out", default="results/scaling/scaling")
     ap.add_argument("--report-only", action="store_true", help="re-fit and re-render <out>.json without running")
@@ -594,9 +673,13 @@ def main(argv=None):
                     args.skipped.append(f"{curve} @ {target} {xunit()}")
                     continue
                 spec = {"family": fname, "knobs": knobs, "width": width, "steps": args.steps}
-                spec |= {"batch": args.batch, "seq": args.seq, "lr": args.lr}
+                spec |= {"batch": args.batch, "seq": args.seq, "lr": args.lr, "cpu": args.cpu}
                 t0 = time.time()
-                r = {"curve": curve, "target_mib": target, "width": width, **_run(spec, env)}
+                runs = []
+                for seed in range(args.seeds):
+                    load = wait_for_quiet(args.max_load)
+                    runs.append({**_run({**spec, "seed": seed}, env), "load_1m": load})
+                r = {"curve": curve, "target_mib": target, "width": width, **merge_seeds(runs)}
                 rows.append(r)
                 msg = str(r.get("error", "")).splitlines()[-1:]
                 print(
