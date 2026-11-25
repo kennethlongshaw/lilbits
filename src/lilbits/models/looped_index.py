@@ -60,17 +60,18 @@ class LoopedIndexConfig:
     flat: float = 0.95  # normalized entropy of block scores above which retrieval falls back to dense
     prelude_linear: str = "littlebit"
     prelude_bpw: float = 1.0
+    scale_bits: int = 16  # LittleBit h, g, l scales of the prelude and (once converted) the core: 16 or 8 (INT8)
     core_linear: str = "fp"  # stage 1 trains the core in FP; convert_core_to_littlebit() for stage 2
     core_bpw: float = 0.55
     n_mtp: int = 2  # draft heads: up to n_mtp drafts per pass
     loop_memory: bool = True
 
 
-def _linear(kind: str, bpw: float):
+def _linear(kind: str, bpw: float, scale_bits: int = 16):
     if kind == "fp":
         return partial(nn.Linear, bias=False)
     if kind == "littlebit":
-        return partial(LittleBitLinear, bpw=bpw, residual=True, ste="clipped")
+        return partial(LittleBitLinear, bpw=bpw, residual=True, ste="clipped", scale_bits=scale_bits)
     raise ValueError(f"unknown linear {kind!r}")
 
 
@@ -79,7 +80,7 @@ class CoreBlock(nn.Module):
 
     def __init__(self, cfg: LoopedIndexConfig):
         super().__init__()
-        d, lin = cfg.d_model, loop_linear_factory(_linear(cfg.core_linear, cfg.core_bpw), cfg.n_loops)
+        d, lin = cfg.d_model, loop_linear_factory(_linear(cfg.core_linear, cfg.core_bpw, cfg.scale_bits), cfg.n_loops)
         self.adapter = lin(2 * d, d)
         self.n1, self.n2, self.n3, self.n4 = (nn.RMSNorm(d) for _ in range(4))
         self.gdn = GatedDeltaNet(d, cfg.n_heads, lin, conv_size=1)  # per-head gates stay FP
@@ -162,7 +163,7 @@ class LoopedIndexLM(nn.Module):
         d = cfg.d_model
         self.embed = nn.Embedding(cfg.vocab_size, d)
         nn.init.normal_(self.embed.weight, std=0.02)
-        pre = _linear(cfg.prelude_linear, cfg.prelude_bpw)
+        pre = _linear(cfg.prelude_linear, cfg.prelude_bpw, cfg.scale_bits)
         self.prelude = nn.ModuleList(StatefulBlock(d, cfg.n_heads, pre) for _ in range(cfg.n_prelude))
         self.core = CoreBlock(cfg)
         self.coda = nn.ModuleList(StatefulBlock(d, cfg.n_heads, _linear("fp", 0)) for _ in range(cfg.n_coda))
@@ -185,7 +186,7 @@ class LoopedIndexLM(nn.Module):
 
     def _segment(self, tokens, cache: Cache, halt_eps: float | None, stats: dict) -> torch.Tensor:
         cfg = self.cfg
-        x = self.embed(tokens)
+        x = tokens if tokens.is_floating_point() else self.embed(tokens)  # (B, L, d) inputs: used as embeddings
         for i, blk in enumerate(self.prelude):
             x, cache.prelude[i] = blk(x, cache.prelude[i])
         e = x
@@ -224,7 +225,8 @@ class LoopedIndexLM(nn.Module):
         return self.norm(h)
 
     def process(self, tokens: torch.Tensor, cache: Cache, halt_eps: float | None = None, stats=None) -> torch.Tensor:
-        """Run tokens (B, L) from the cache's position on; returns normed hidden states (B, L, d)."""
+        """Run tokens (B, L) from the cache's position on; returns normed hidden states (B, L, d).
+        A float tensor (B, L, d) is taken as input embeddings instead (e.g. byte-patch vectors)."""
         stats = {} if stats is None else stats
         outs, t = [], 0
         while t < tokens.shape[1]:
@@ -337,7 +339,8 @@ def convert_core_to_littlebit(
     """Stage 2: the core's shared FP linears -> LittleBit (Dual-SVID from the FP weights), keeping per-loop scales.
     `ranks` (core module name -> rank, see `allocate_core_ranks`) replaces the uniform bpw per layer."""
     bpw = model.cfg.core_bpw if bpw is None else bpw
-    convert_loop_linears(model.core, partial(LittleBitLinear, bpw=bpw, residual=True, ste="clipped"), ranks=ranks)
+    make = partial(LittleBitLinear, bpw=bpw, residual=True, ste="clipped", scale_bits=model.cfg.scale_bits)
+    convert_loop_linears(model.core, make, ranks=ranks)
     model.cfg.core_linear = "littlebit"
 
 
