@@ -16,6 +16,13 @@ The repo collects interchangeable building blocks, each with tests and a dense F
 side by side on every dimension. `docs/primitives.md` maps the target architectures (looped LittleBit core,
 sparse state index, MTP/verify, typed decision readout) to what exists and what is still missing.
 
+**Does a trick scale?** `uv run python benchmarks/scaling.py` is the standard answer: every model family (FP16
+GDN baseline, pocket, looped index, operator loop; add one with a small adapter) is swept over a fixed grid of
+deployed sizes, varying width, depth, loop count and bpw one knob at a time. Each point records params, deployed
+and on-disk bytes, a short-run bits per byte, train step time, CPU, peak RAM, prefill and decode speed, and
+inference RAM. It fits power laws per curve and reports the FP16 crossovers in `results/scaling/` (md, json, png).
+The default is smoke scale (0.5 / 1 / 2 MiB, 20 steps, about 15 minutes on one core).
+
 It started as a prototype of LittleBit trained **from scratch** (no pretrained teacher, no distillation). The
 results below come from that work. References: Lee et al., *LittleBit: Ultra Low-Bit Quantization via Latent
 Factorization* (NeurIPS 2025, arXiv:2506.13771), LittleBit-2 (arXiv:2603.00042), and Ma et al., *The Era of
