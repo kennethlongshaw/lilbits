@@ -1,0 +1,774 @@
+[
+  {
+    "name": "13 operator loop vs attention loop: sort",
+    "cmd": [
+      "examples/13_operator_loop.py",
+      "--task",
+      "sort"
+    ],
+    "phases": {
+      "train": {
+        "ok": true,
+        "wall_s": 8.844764331000079,
+        "cpu_s": 9.108147,
+        "cpu_util": 1.0297783704735681,
+        "peak_rss_mib": 1293.390625,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "train",
+          "train": {
+            "ops": {
+              "steps": 4,
+              "last_loss": 4.8803277015686035,
+              "ce": 4.869888782501221,
+              "load_balance": 1.0438838005065918,
+              "tau": 0.30000000000000016,
+              "wall_s": 4.686506210000061,
+              "cpu_s": 5.001918485999999,
+              "cpu_util": 1.0673022208584535,
+              "peak_extra_mib": 532.11328125
+            },
+            "attend": {
+              "steps": 4,
+              "last_loss": 4.7122483253479,
+              "ce": 4.7122483253479,
+              "load_balance": 1.0,
+              "tau": 0.30000000000000016,
+              "wall_s": 0.32570374500028265,
+              "cpu_s": 0.34776807700000045,
+              "cpu_util": 1.0677435624809861,
+              "peak_extra_mib": 81.29296875
+            },
+            "wall_s": 5.304333465000127,
+            "cpu_s": 5.633077836,
+            "cpu_util": 1.0619765656079214,
+            "peak_extra_mib": 532.140625
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"train\", \"train\": {\"ops\": {\"steps\": 4, \"last_loss\": 4.8803277015686035, \"ce\": 4.869888782501221, \"load_balance\": 1.0438838005065918, \"tau\": 0.30000000000000016, \"wall_s\": 4.686506210000061, \"cpu_s\": 5.001918485999999, \"cpu_util\": 1.0673022208584535, \"peak_extra_mib\": 532.11328125}, \"attend\": {\"steps\": 4, \"last_loss\": 4.7122483253479, \"ce\": 4.7122483253479, \"load_balance\": 1.0, \"tau\": 0.30000000000000016, \"wall_s\": 0.32570374500028265, \"cpu_s\": 0.34776807700000045, \"cpu_util\": 1.0677435624809861, \"peak_extra_mib\": 81.29296875}, \"wall_s\": 5.304333465000127, \"cpu_s\": 5.633077836, \"cpu_util\": 1.0619765656079214, \"peak_extra_mib\": 532.140625}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      },
+      "test": {
+        "ok": true,
+        "wall_s": 8.055635238999912,
+        "cpu_s": 8.144499,
+        "cpu_util": 1.011031254316217,
+        "peak_rss_mib": 884.50390625,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "test",
+          "test": {
+            "ops": {
+              "exact_match_by_loops": {
+                "1 loops": 0.0,
+                "2 loops": 0.0,
+                "3 loops": 0.0,
+                "4 loops": 0.0
+              },
+              "op_usage_by_loop": {
+                "loop 0": {
+                  "filter": 6
+                },
+                "loop 1": {
+                  "filter": 6
+                },
+                "loop 2": {
+                  "filter": 6
+                },
+                "loop 3": {
+                  "noop": 6
+                }
+              }
+            },
+            "attend": {
+              "exact_match_by_loops": {
+                "1 loops": 0.0,
+                "2 loops": 0.0,
+                "3 loops": 0.0,
+                "4 loops": 0.0
+              },
+              "op_usage_by_loop": {
+                "loop 0": {
+                  "attend": 6
+                },
+                "loop 1": {
+                  "attend": 6
+                },
+                "loop 2": {
+                  "attend": 6
+                },
+                "loop 3": {
+                  "attend": 6
+                }
+              }
+            },
+            "sample_trace": "filter -> filter -> filter -> noop",
+            "note": "smoke-trained: scores and op usage show the mechanics only",
+            "wall_s": 4.723239724999985,
+            "cpu_s": 4.887232922999999,
+            "cpu_util": 1.0347204900763352,
+            "peak_extra_mib": 28.5078125
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"test\", \"test\": {\"ops\": {\"exact_match_by_loops\": {\"1 loops\": 0.0, \"2 loops\": 0.0, \"3 loops\": 0.0, \"4 loops\": 0.0}, \"op_usage_by_loop\": {\"loop 0\": {\"filter\": 6}, \"loop 1\": {\"filter\": 6}, \"loop 2\": {\"filter\": 6}, \"loop 3\": {\"noop\": 6}}}, \"attend\": {\"exact_match_by_loops\": {\"1 loops\": 0.0, \"2 loops\": 0.0, \"3 loops\": 0.0, \"4 loops\": 0.0}, \"op_usage_by_loop\": {\"loop 0\": {\"attend\": 6}, \"loop 1\": {\"attend\": 6}, \"loop 2\": {\"attend\": 6}, \"loop 3\": {\"attend\": 6}}}, \"sample_trace\": \"filter -> filter -> filter -> noop\", \"note\": \"smoke-trained: scores and op usage show the mechanics only\", \"wall_s\": 4.723239724999985, \"cpu_s\": 4.887232922999999, \"cpu_util\": 1.0347204900763352, \"peak_extra_mib\": 28.5078125}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      },
+      "infer": {
+        "ok": true,
+        "wall_s": 4.158880216999933,
+        "cpu_s": 4.111937,
+        "cpu_util": 0.9887125344923265,
+        "peak_rss_mib": 880.7890625,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "infer",
+          "infer": {
+            "ops": {
+              "ms": 38.488137999593164,
+              "answer": "SL",
+              "trace": "filter -> filter -> filter -> noop"
+            },
+            "attend": {
+              "ms": 86.73326200005249,
+              "answer": "CIAIAIAIIIIIIIII",
+              "trace": "attend -> attend -> attend -> attend"
+            },
+            "wall_s": 0.45340784800009715,
+            "cpu_s": 0.462611989,
+            "cpu_util": 1.0202999154966124,
+            "peak_extra_mib": 17.43359375
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"infer\", \"infer\": {\"ops\": {\"ms\": 38.488137999593164, \"answer\": \"SL\", \"trace\": \"filter -> filter -> filter -> noop\"}, \"attend\": {\"ms\": 86.73326200005249, \"answer\": \"CIAIAIAIIIIIIIII\", \"trace\": \"attend -> attend -> attend -> attend\"}, \"wall_s\": 0.45340784800009715, \"cpu_s\": 0.462611989, \"cpu_util\": 1.0202999154966124, \"peak_extra_mib\": 17.43359375}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      }
+    }
+  },
+  {
+    "name": "13 operator loop vs attention loop: count",
+    "cmd": [
+      "examples/13_operator_loop.py",
+      "--task",
+      "count"
+    ],
+    "phases": {
+      "train": {
+        "ok": true,
+        "wall_s": 10.565717474999929,
+        "cpu_s": 11.124196,
+        "cpu_util": 1.0528576053941925,
+        "peak_rss_mib": 1293.3203125,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "train",
+          "train": {
+            "ops": {
+              "steps": 4,
+              "last_loss": 4.480245590209961,
+              "ce": 4.469221115112305,
+              "load_balance": 1.102451205253601,
+              "tau": 0.30000000000000016,
+              "wall_s": 5.541418176000207,
+              "cpu_s": 6.201073184,
+              "cpu_util": 1.119040828006222,
+              "peak_extra_mib": 531.7890625
+            },
+            "attend": {
+              "steps": 4,
+              "last_loss": 3.9406986236572266,
+              "ce": 3.9406986236572266,
+              "load_balance": 1.0,
+              "tau": 0.30000000000000016,
+              "wall_s": 0.41294872399976157,
+              "cpu_s": 0.4413787770000006,
+              "cpu_util": 1.068846448355306,
+              "peak_extra_mib": 85.83984375
+            },
+            "wall_s": 6.347776781999983,
+            "cpu_s": 7.036963752,
+            "cpu_util": 1.108571393366305,
+            "peak_extra_mib": 531.81640625
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"train\", \"train\": {\"ops\": {\"steps\": 4, \"last_loss\": 4.480245590209961, \"ce\": 4.469221115112305, \"load_balance\": 1.102451205253601, \"tau\": 0.30000000000000016, \"wall_s\": 5.541418176000207, \"cpu_s\": 6.201073184, \"cpu_util\": 1.119040828006222, \"peak_extra_mib\": 531.7890625}, \"attend\": {\"steps\": 4, \"last_loss\": 3.9406986236572266, \"ce\": 3.9406986236572266, \"load_balance\": 1.0, \"tau\": 0.30000000000000016, \"wall_s\": 0.41294872399976157, \"cpu_s\": 0.4413787770000006, \"cpu_util\": 1.068846448355306, \"peak_extra_mib\": 85.83984375}, \"wall_s\": 6.347776781999983, \"cpu_s\": 7.036963752, \"cpu_util\": 1.108571393366305, \"peak_extra_mib\": 531.81640625}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      },
+      "test": {
+        "ok": true,
+        "wall_s": 10.99983413999962,
+        "cpu_s": 11.245271,
+        "cpu_util": 1.0223127782543444,
+        "peak_rss_mib": 905.91796875,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "test",
+          "test": {
+            "ops": {
+              "exact_match_by_loops": {
+                "1 loops": 0.0,
+                "2 loops": 0.0,
+                "3 loops": 0.0,
+                "4 loops": 0.0
+              },
+              "op_usage_by_loop": {
+                "loop 0": {
+                  "filter": 6
+                },
+                "loop 1": {
+                  "filter": 6
+                },
+                "loop 2": {
+                  "filter": 6
+                },
+                "loop 3": {
+                  "filter": 6
+                }
+              }
+            },
+            "attend": {
+              "exact_match_by_loops": {
+                "1 loops": 0.6666666666666666,
+                "2 loops": 0.6666666666666666,
+                "3 loops": 0.6666666666666666,
+                "4 loops": 0.6666666666666666
+              },
+              "op_usage_by_loop": {
+                "loop 0": {
+                  "attend": 6
+                },
+                "loop 1": {
+                  "attend": 6
+                },
+                "loop 2": {
+                  "attend": 6
+                },
+                "loop 3": {
+                  "attend": 6
+                }
+              }
+            },
+            "sample_trace": "filter -> filter -> filter -> filter",
+            "note": "smoke-trained: scores and op usage show the mechanics only",
+            "wall_s": 7.14819936899994,
+            "cpu_s": 7.463775002999999,
+            "cpu_util": 1.0441475702774374,
+            "peak_extra_mib": 44.7890625
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"test\", \"test\": {\"ops\": {\"exact_match_by_loops\": {\"1 loops\": 0.0, \"2 loops\": 0.0, \"3 loops\": 0.0, \"4 loops\": 0.0}, \"op_usage_by_loop\": {\"loop 0\": {\"filter\": 6}, \"loop 1\": {\"filter\": 6}, \"loop 2\": {\"filter\": 6}, \"loop 3\": {\"filter\": 6}}}, \"attend\": {\"exact_match_by_loops\": {\"1 loops\": 0.6666666666666666, \"2 loops\": 0.6666666666666666, \"3 loops\": 0.6666666666666666, \"4 loops\": 0.6666666666666666}, \"op_usage_by_loop\": {\"loop 0\": {\"attend\": 6}, \"loop 1\": {\"attend\": 6}, \"loop 2\": {\"attend\": 6}, \"loop 3\": {\"attend\": 6}}}, \"sample_trace\": \"filter -> filter -> filter -> filter\", \"note\": \"smoke-trained: scores and op usage show the mechanics only\", \"wall_s\": 7.14819936899994, \"cpu_s\": 7.463775002999999, \"cpu_util\": 1.0441475702774374, \"peak_extra_mib\": 44.7890625}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      },
+      "infer": {
+        "ok": true,
+        "wall_s": 4.725589148999916,
+        "cpu_s": 4.686153,
+        "cpu_util": 0.9916547656267871,
+        "peak_rss_mib": 882.87109375,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "infer",
+          "infer": {
+            "ops": {
+              "ms": 166.205180000361,
+              "answer": "1\ufffdy\ufffdv\ufffd",
+              "trace": "filter -> filter -> filter -> filter"
+            },
+            "attend": {
+              "ms": 19.029037000109383,
+              "answer": "1",
+              "trace": "attend -> attend -> attend -> attend"
+            },
+            "wall_s": 0.6163370360000044,
+            "cpu_s": 0.6210580550000002,
+            "cpu_util": 1.0076598009274844,
+            "peak_extra_mib": 28.02734375
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"infer\", \"infer\": {\"ops\": {\"ms\": 166.205180000361, \"answer\": \"1\\ufffdy\\ufffdv\\ufffd\", \"trace\": \"filter -> filter -> filter -> filter\"}, \"attend\": {\"ms\": 19.029037000109383, \"answer\": \"1\", \"trace\": \"attend -> attend -> attend -> attend\"}, \"wall_s\": 0.6163370360000044, \"cpu_s\": 0.6210580550000002, \"cpu_util\": 1.0076598009274844, \"peak_extra_mib\": 28.02734375}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      }
+    }
+  },
+  {
+    "name": "13 operator loop vs attention loop: who_said",
+    "cmd": [
+      "examples/13_operator_loop.py",
+      "--task",
+      "who_said"
+    ],
+    "phases": {
+      "train": {
+        "ok": true,
+        "wall_s": 9.374538812000083,
+        "cpu_s": 9.722764,
+        "cpu_util": 1.0371458473833575,
+        "peak_rss_mib": 1294.71875,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "train",
+          "train": {
+            "ops": {
+              "steps": 4,
+              "last_loss": 5.038750171661377,
+              "ce": 5.026795864105225,
+              "load_balance": 1.1954345703125,
+              "tau": 0.30000000000000016,
+              "wall_s": 4.6788976079997155,
+              "cpu_s": 5.120233883999999,
+              "cpu_util": 1.0943248416562295,
+              "peak_extra_mib": 533.23046875
+            },
+            "attend": {
+              "steps": 4,
+              "last_loss": 5.02363395690918,
+              "ce": 5.02363395690918,
+              "load_balance": 1.0,
+              "tau": 0.30000000000000016,
+              "wall_s": 0.34043406799992226,
+              "cpu_s": 0.36847111799999865,
+              "cpu_util": 1.0823567692998421,
+              "peak_extra_mib": 85.28515625
+            },
+            "wall_s": 5.339410476000012,
+            "cpu_s": 5.810142806999999,
+            "cpu_util": 1.088161854780761,
+            "peak_extra_mib": 533.2578125
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"train\", \"train\": {\"ops\": {\"steps\": 4, \"last_loss\": 5.038750171661377, \"ce\": 5.026795864105225, \"load_balance\": 1.1954345703125, \"tau\": 0.30000000000000016, \"wall_s\": 4.6788976079997155, \"cpu_s\": 5.120233883999999, \"cpu_util\": 1.0943248416562295, \"peak_extra_mib\": 533.23046875}, \"attend\": {\"steps\": 4, \"last_loss\": 5.02363395690918, \"ce\": 5.02363395690918, \"load_balance\": 1.0, \"tau\": 0.30000000000000016, \"wall_s\": 0.34043406799992226, \"cpu_s\": 0.36847111799999865, \"cpu_util\": 1.0823567692998421, \"peak_extra_mib\": 85.28515625}, \"wall_s\": 5.339410476000012, \"cpu_s\": 5.810142806999999, \"cpu_util\": 1.088161854780761, \"peak_extra_mib\": 533.2578125}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      },
+      "test": {
+        "ok": true,
+        "wall_s": 22.563232992000394,
+        "cpu_s": 23.137582,
+        "cpu_util": 1.0254550847479718,
+        "peak_rss_mib": 887.96484375,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "test",
+          "test": {
+            "ops": {
+              "exact_match_by_loops": {
+                "1 loops": 0.0,
+                "2 loops": 0.0,
+                "3 loops": 0.0,
+                "4 loops": 0.0
+              },
+              "op_usage_by_loop": {
+                "loop 0": {
+                  "attend": 6
+                },
+                "loop 1": {
+                  "max": 6
+                },
+                "loop 2": {
+                  "max": 6
+                },
+                "loop 3": {
+                  "max": 6
+                }
+              }
+            },
+            "attend": {
+              "exact_match_by_loops": {
+                "1 loops": 0.0,
+                "2 loops": 0.0,
+                "3 loops": 0.0,
+                "4 loops": 0.0
+              },
+              "op_usage_by_loop": {
+                "loop 0": {
+                  "attend": 6
+                },
+                "loop 1": {
+                  "attend": 6
+                },
+                "loop 2": {
+                  "attend": 6
+                },
+                "loop 3": {
+                  "attend": 6
+                }
+              }
+            },
+            "sample_trace": "attend -> max -> max -> max",
+            "note": "smoke-trained: scores and op usage show the mechanics only",
+            "wall_s": 18.79682327699993,
+            "cpu_s": 19.447201686,
+            "cpu_util": 1.0346004428203506,
+            "peak_extra_mib": 58.40625
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"test\", \"test\": {\"ops\": {\"exact_match_by_loops\": {\"1 loops\": 0.0, \"2 loops\": 0.0, \"3 loops\": 0.0, \"4 loops\": 0.0}, \"op_usage_by_loop\": {\"loop 0\": {\"attend\": 6}, \"loop 1\": {\"max\": 6}, \"loop 2\": {\"max\": 6}, \"loop 3\": {\"max\": 6}}}, \"attend\": {\"exact_match_by_loops\": {\"1 loops\": 0.0, \"2 loops\": 0.0, \"3 loops\": 0.0, \"4 loops\": 0.0}, \"op_usage_by_loop\": {\"loop 0\": {\"attend\": 6}, \"loop 1\": {\"attend\": 6}, \"loop 2\": {\"attend\": 6}, \"loop 3\": {\"attend\": 6}}}, \"sample_trace\": \"attend -> max -> max -> max\", \"note\": \"smoke-trained: scores and op usage show the mechanics only\", \"wall_s\": 18.79682327699993, \"cpu_s\": 19.447201686, \"cpu_util\": 1.0346004428203506, \"peak_extra_mib\": 58.40625}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      },
+      "infer": {
+        "ok": true,
+        "wall_s": 4.887068326999724,
+        "cpu_s": 4.918518,
+        "cpu_util": 1.0064352840795217,
+        "peak_rss_mib": 885.21484375,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "infer",
+          "infer": {
+            "ops": {
+              "ms": 753.4765599998536,
+              "answer": "hcv\ufffd\ufffd\ufffd'\ufffd\ufffd\ufffd\u000b\ufffd\ufffds\ufffd\ufffd",
+              "trace": "attend -> max -> max -> max"
+            },
+            "attend": {
+              "ms": 51.510123000298336,
+              "answer": "MENIUS",
+              "trace": "attend -> attend -> attend -> attend"
+            },
+            "wall_s": 1.1430953239996597,
+            "cpu_s": 1.206769187,
+            "cpu_util": 1.0557030211422325,
+            "peak_extra_mib": 48.6796875
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"infer\", \"infer\": {\"ops\": {\"ms\": 753.4765599998536, \"answer\": \"hcv\\ufffd\\ufffd\\ufffd'\\ufffd\\ufffd\\ufffd\\u000b\\ufffd\\ufffds\\ufffd\\ufffd\", \"trace\": \"attend -> max -> max -> max\"}, \"attend\": {\"ms\": 51.510123000298336, \"answer\": \"MENIUS\", \"trace\": \"attend -> attend -> attend -> attend\"}, \"wall_s\": 1.1430953239996597, \"cpu_s\": 1.206769187, \"cpu_util\": 1.0557030211422325, \"peak_extra_mib\": 48.6796875}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      }
+    }
+  },
+  {
+    "name": "13 operator loop vs attention loop: who_next",
+    "cmd": [
+      "examples/13_operator_loop.py",
+      "--task",
+      "who_next"
+    ],
+    "phases": {
+      "train": {
+        "ok": true,
+        "wall_s": 9.653096961999836,
+        "cpu_s": 10.060365000000001,
+        "cpu_util": 1.0421904016507249,
+        "peak_rss_mib": 1293.49609375,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "train",
+          "train": {
+            "ops": {
+              "steps": 4,
+              "last_loss": 4.888767242431641,
+              "ce": 4.878202438354492,
+              "load_balance": 1.0564863681793213,
+              "tau": 0.30000000000000016,
+              "wall_s": 4.825557125999694,
+              "cpu_s": 5.280822962,
+              "cpu_util": 1.094344720021523,
+              "peak_extra_mib": 532.2421875
+            },
+            "attend": {
+              "steps": 4,
+              "last_loss": 5.004711151123047,
+              "ce": 5.004711151123047,
+              "load_balance": 1.0,
+              "tau": 0.30000000000000016,
+              "wall_s": 0.38713248600015504,
+              "cpu_s": 0.44688509999999937,
+              "cpu_util": 1.1543466801693836,
+              "peak_extra_mib": 86.28515625
+            },
+            "wall_s": 5.565618173000075,
+            "cpu_s": 6.082743758,
+            "cpu_util": 1.0929143122876457,
+            "peak_extra_mib": 532.26953125
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"train\", \"train\": {\"ops\": {\"steps\": 4, \"last_loss\": 4.888767242431641, \"ce\": 4.878202438354492, \"load_balance\": 1.0564863681793213, \"tau\": 0.30000000000000016, \"wall_s\": 4.825557125999694, \"cpu_s\": 5.280822962, \"cpu_util\": 1.094344720021523, \"peak_extra_mib\": 532.2421875}, \"attend\": {\"steps\": 4, \"last_loss\": 5.004711151123047, \"ce\": 5.004711151123047, \"load_balance\": 1.0, \"tau\": 0.30000000000000016, \"wall_s\": 0.38713248600015504, \"cpu_s\": 0.44688509999999937, \"cpu_util\": 1.1543466801693836, \"peak_extra_mib\": 86.28515625}, \"wall_s\": 5.565618173000075, \"cpu_s\": 6.082743758, \"cpu_util\": 1.0929143122876457, \"peak_extra_mib\": 532.26953125}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      },
+      "test": {
+        "ok": true,
+        "wall_s": 6.1581128810003065,
+        "cpu_s": 6.164148,
+        "cpu_util": 1.0009800273421934,
+        "peak_rss_mib": 919.9453125,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "test",
+          "test": {
+            "ops": {
+              "exact_match_by_loops": {
+                "1 loops": 0.0,
+                "2 loops": 0.0,
+                "3 loops": 0.0,
+                "4 loops": 0.0
+              },
+              "op_usage_by_loop": {
+                "loop 0": {
+                  "filter": 6
+                },
+                "loop 1": {
+                  "max": 6
+                },
+                "loop 2": {
+                  "point": 6
+                },
+                "loop 3": {
+                  "count": 6
+                }
+              }
+            },
+            "attend": {
+              "exact_match_by_loops": {
+                "1 loops": 0.0,
+                "2 loops": 0.0,
+                "3 loops": 0.0,
+                "4 loops": 0.0
+              },
+              "op_usage_by_loop": {
+                "loop 0": {
+                  "attend": 6
+                },
+                "loop 1": {
+                  "attend": 6
+                },
+                "loop 2": {
+                  "attend": 6
+                },
+                "loop 3": {
+                  "attend": 6
+                }
+              }
+            },
+            "sample_trace": "filter -> max -> point -> count",
+            "note": "smoke-trained: scores and op usage show the mechanics only",
+            "wall_s": 2.0432036320003135,
+            "cpu_s": 2.1268824879999997,
+            "cpu_util": 1.0409547314272165,
+            "peak_extra_mib": 58.9921875
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"test\", \"test\": {\"ops\": {\"exact_match_by_loops\": {\"1 loops\": 0.0, \"2 loops\": 0.0, \"3 loops\": 0.0, \"4 loops\": 0.0}, \"op_usage_by_loop\": {\"loop 0\": {\"filter\": 6}, \"loop 1\": {\"max\": 6}, \"loop 2\": {\"point\": 6}, \"loop 3\": {\"count\": 6}}}, \"attend\": {\"exact_match_by_loops\": {\"1 loops\": 0.0, \"2 loops\": 0.0, \"3 loops\": 0.0, \"4 loops\": 0.0}, \"op_usage_by_loop\": {\"loop 0\": {\"attend\": 6}, \"loop 1\": {\"attend\": 6}, \"loop 2\": {\"attend\": 6}, \"loop 3\": {\"attend\": 6}}}, \"sample_trace\": \"filter -> max -> point -> count\", \"note\": \"smoke-trained: scores and op usage show the mechanics only\", \"wall_s\": 2.0432036320003135, \"cpu_s\": 2.1268824879999997, \"cpu_util\": 1.0409547314272165, \"peak_extra_mib\": 58.9921875}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      },
+      "infer": {
+        "ok": true,
+        "wall_s": 4.582578202999684,
+        "cpu_s": 4.559839,
+        "cpu_util": 0.9950379018115175,
+        "peak_rss_mib": 884.03125,
+        "metrics": {
+          "example": "13_operator_loop",
+          "mode": "infer",
+          "infer": {
+            "ops": {
+              "ms": 61.33935400021073,
+              "answer": "",
+              "trace": "filter -> max -> point -> count"
+            },
+            "attend": {
+              "ms": 19.809852999969735,
+              "answer": "S",
+              "trace": "attend -> attend -> attend -> attend"
+            },
+            "wall_s": 0.455213169000217,
+            "cpu_s": 0.4639528989999997,
+            "cpu_util": 1.0191992029118526,
+            "peak_extra_mib": 43.4453125
+          },
+          "size": {
+            "ops": {
+              "params": 333096,
+              "weight_ram_bytes": 1332384,
+              "deployed_bytes": 666192.0
+            },
+            "attend": {
+              "params": 332223,
+              "weight_ram_bytes": 1328892,
+              "deployed_bytes": 664446.0
+            },
+            "checkpoint_file_bytes": 2689511
+          }
+        },
+        "tail": [
+          "  attend                           {params: 332223, weight_ram_bytes: 1328892, deployed_bytes: 6.644e+05}",
+          "  checkpoint_file_bytes            2689511",
+          "METRICS {\"example\": \"13_operator_loop\", \"mode\": \"infer\", \"infer\": {\"ops\": {\"ms\": 61.33935400021073, \"answer\": \"\", \"trace\": \"filter -> max -> point -> count\"}, \"attend\": {\"ms\": 19.809852999969735, \"answer\": \"S\", \"trace\": \"attend -> attend -> attend -> attend\"}, \"wall_s\": 0.455213169000217, \"cpu_s\": 0.4639528989999997, \"cpu_util\": 1.0191992029118526, \"peak_extra_mib\": 43.4453125}, \"size\": {\"ops\": {\"params\": 333096, \"weight_ram_bytes\": 1332384, \"deployed_bytes\": 666192.0}, \"attend\": {\"params\": 332223, \"weight_ram_bytes\": 1328892, \"deployed_bytes\": 664446.0}, \"checkpoint_file_bytes\": 2689511}}"
+        ]
+      }
+    }
+  }
+]
