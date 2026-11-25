@@ -62,6 +62,12 @@ class OperatorLoop(nn.Module):
         sizes = (len(self.ops), n_set, n_vec + 1, n_set, n_vec)  # op, set in, vec in (h + regs), set dst, vec dst
         self.sizes = sizes
         self.router = nn.Linear(d, sum(sizes))
+        # task summary for the router: one learned query attends causally over the context, so a position far
+        # from the instruction (e.g. the answer slot) can still route on it (its own hidden state may not carry it)
+        self.summary_q = nn.Parameter(torch.randn(d) * 0.02)
+        self.summary_k = nn.Linear(d, d, bias=False)
+        self.summary_o = nn.Linear(d, d, bias=False)
+        nn.init.zeros_(self.summary_o.weight)
         self.q = nn.Linear(d, d, bias=False)
         self.k_proj = nn.Linear(d, d, bias=False)
         self.v_proj = nn.Linear(d, d, bias=False)
@@ -78,14 +84,20 @@ class OperatorLoop(nn.Module):
             ref.new_zeros(B, T, self.d) for _ in range(self.n_vec)
         ]
 
+    def task_summary(self, ctx: torch.Tensor, causal: torch.Tensor) -> torch.Tensor:
+        """(B, T, d): per position, a softmax-weighted causal pool of the context under one learned query."""
+        a = (self.summary_k(ctx) @ self.summary_q) / math.sqrt(self.d)  # (B, T)
+        a = a[:, None, :].expand(-1, ctx.shape[1], -1).masked_fill(~causal, float("-inf"))
+        return a.softmax(-1) @ ctx
+
     def forward(self, h, ctx, regs, loop: int, tau: float = 1.0, hard: bool = False, generator=None):
         """h (B, T, d) hidden; ctx (B, T, d) scanned context; regs (sets, vecs). Returns h, regs, probs dict."""
         B, T, d = h.shape
         sets, vecs = regs
-        z = self.norm(h) + self.loop_emb.weight[loop]
+        causal = torch.ones(T, T, dtype=torch.bool, device=h.device).tril()
+        z = self.norm(h) + self.loop_emb.weight[loop] + self.summary_o(self.task_summary(ctx, causal))
         parts = self.router(z).split(self.sizes, -1)
         p_op, p_sin, p_vin, p_sdst, p_vdst = (gumbel_probs(x, tau, hard, generator) for x in parts)
-        causal = torch.ones(T, T, dtype=torch.bool, device=h.device).tril()
         S = sum(p_sin[..., j, None] * sets[j] for j in range(self.n_set))  # chosen SET input (B, T, T)
         vin_all = [h, *vecs]
         vin = sum(p_vin[..., j, None] * vin_all[j] for j in range(self.n_vec + 1))
