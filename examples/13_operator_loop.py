@@ -10,8 +10,9 @@ over a set) address whole words: keys and values are pooled over each word and o
 candidates, so a predicate can match a multi-byte name (--no-word-keys: single bytes).
 
 Training stages (each model gets the same):
-    pretrain  next-byte LM on the Shakespeare corpus (--pretrain-steps), so the encoder, ops and router start from
-              real text instead of cold
+    pretrain  next-byte LM (--pretrain-steps) on a mix of Shakespeare and dense op streams (--dense-frac): key-value
+              recall with many queries, copying, running counts, trained on every byte an op can predict, so the
+              lookup / pointer / count skills exist before the tasks (whose answers are only 2-3 bytes each)
     warm-up   supervised on generated problems from every task, with teacher-forced router targets: at answer
               positions, loop j is pushed toward the task's j-th expected op group (-log P(op in group)), on top of
               the answer CE (--warmup-steps, --router-weight)
@@ -44,7 +45,7 @@ import torch
 
 from lilbits.measure import Meter
 from lilbits.models.op_loop import OpLoopLM
-from lilbits.op_tasks import TASKS, chain_match, make, score
+from lilbits.op_tasks import TASKS, chain_match, dense_stream, make, score
 from lilbits.runner import Example, fit, run
 from lilbits.shakespeare import ShakespeareBytes, segment_tensors, text_of
 from lilbits.training.preference import grpo_loss, seq_logprob
@@ -55,6 +56,9 @@ def add_args(ap):
     ap.add_argument("--d", type=int, default=96)
     ap.add_argument("--loops", type=int, default=4)
     ap.add_argument("--pretrain-steps", type=int, default=2, help="Shakespeare LM steps (default: smoke run)")
+    ap.add_argument(
+        "--dense-frac", type=float, default=0.5, help="pretrain: share of rows from dense op streams (rest Shakespeare)"
+    )
     ap.add_argument("--warmup-steps", type=int, default=2, help="mixed-task router warm-up steps")
     ap.add_argument(
         "--init",
@@ -139,9 +143,14 @@ def train_fn(models, args, fab):
             corpus = ShakespeareBytes("train", seed=args.seed)
 
             def lm_batch(i, model=model, corpus=corpus):
+                """Half Shakespeare (every byte trained), half dense op streams (recall / copy / count: only the
+                bytes an op can predict are trained)."""
                 model.tau = 1.0
-                x = corpus.sample(args.batch, args.seq)
-                return x, torch.ones(x.shape[0], x.shape[1] - 1)
+                n_text = round(args.batch * (1 - args.dense_frac))
+                rows = [[(bytes(r.tolist()), True)] for r in corpus.sample(n_text, args.seq)] if n_text else []
+                rng = random.Random(20_000 + i)
+                rows += [dense_stream(rng, args.seq + 1) for _ in range(args.batch - n_text)]
+                return segment_tensors(rows, args.seq)
 
             with Meter() as m:
                 info = fit(
@@ -200,7 +209,22 @@ def train_fn(models, args, fab):
                 schedule=args.schedule,
             )
         out[f"{name}: SFT"] = {**info, **m.as_dict()}
+        gate = 0.0
         if args.grpo_steps:
+            # GRPO only learns from reward differences inside a group; with all-zero reward it has no signal.
+            probe = examples(args, 40_000, 16)
+            gate = (
+                sum(
+                    score(args.task, c.decode(errors="replace"), e)
+                    for e in probe
+                    for c in model.sample(e.prompt, 2, generator=g)
+                )
+                / 32
+            )
+            out[f"{name}: GRPO gate"] = {"sft_sample_reward": gate}
+        if args.grpo_steps and gate == 0.0:
+            out[f"{name}: GRPO"] = {"skipped": "SFT samples earn zero reward, so GRPO has nothing to learn from"}
+        elif args.grpo_steps:
             ref = OpLoopLM(args.d, args.loops, ops=model.ops)
             ref.load_state_dict(model.state_dict())
             ref.eval().requires_grad_(False)

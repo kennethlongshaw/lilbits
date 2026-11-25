@@ -142,7 +142,12 @@ class OperatorLoop(nn.Module):
         summary = self.task_summary(ctx, causal)
         z = self.norm(h) + self.loop_emb.weight[loop] + self.summary_o(summary)
         parts = self.router(z).split(self.sizes, -1)
-        p_op, p_sin, p_vin, p_sdst, p_vdst = (gumbel_probs(x, tau, hard, generator, st) for x in parts)
+        # Gumbel noise explores the op choice only; the input / output slots use the plain tempered softmax, so
+        # an op reads and writes a consistent register from step to step
+        p_op = gumbel_probs(parts[0], tau, hard, generator, st)
+        p_sin, p_vin, p_sdst, p_vdst = (
+            F.one_hot(x.argmax(-1), x.shape[-1]).to(x) if hard else (x / tau).softmax(-1) for x in parts[1:]
+        )
         chosen = p_op.detach().flatten(0, -2).amax(0) > 0.5 if (hard or st) else None
         S = sum(p_sin[..., j, None] * sets[j] for j in range(self.n_set))  # chosen SET input (B, T, T)
         vin_all = [h, *vecs]

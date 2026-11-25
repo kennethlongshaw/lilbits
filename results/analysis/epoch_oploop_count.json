@@ -1,0 +1,79 @@
+{
+ "task": "count",
+ "ops": {
+  "score": 0.375,
+  "expected_chain_rate": 1.0,
+  "router_entropy_by_loop": [
+   0.0013097320161932658,
+   0.0002450403264901979,
+   0.01290855869792722,
+   0.02644346192537341
+  ],
+  "ops_when_right": [
+   {
+    "filter": 15
+   },
+   {
+    "count": 15
+   },
+   {
+    "count": 15
+   },
+   {
+    "count": 15
+   }
+  ],
+  "ops_when_wrong": [
+   {
+    "filter": 25
+   },
+   {
+    "count": 25
+   },
+   {
+    "count": 25
+   },
+   {
+    "count": 25
+   }
+  ]
+ },
+ "attend": {
+  "score": 0.375,
+  "expected_chain_rate": 0.0,
+  "router_entropy_by_loop": [
+   NaN,
+   NaN,
+   NaN,
+   NaN
+  ],
+  "ops_when_right": [
+   {
+    "attend": 15
+   },
+   {
+    "attend": 15
+   },
+   {
+    "attend": 15
+   },
+   {
+    "attend": 15
+   }
+  ],
+  "ops_when_wrong": [
+   {
+    "attend": 25
+   },
+   {
+    "attend": 25
+   },
+   {
+    "attend": 25
+   },
+   {
+    "attend": 25
+   }
+  ]
+ }
+}

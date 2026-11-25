@@ -30,3 +30,19 @@ def test_easy_level_uses_one_letter_names_and_scores():
         e = make(task, rng, level=0)
         assert score(task, e.answer, e) == 1.0
         assert len(e.prompt) < 60
+
+
+def test_dense_stream_fits_and_trains_only_predictable_bytes():
+    import random
+
+    from lilbits.op_tasks import dense_stream
+    from lilbits.shakespeare import segment_tensors
+
+    segs = dense_stream(random.Random(0), 201)
+    assert 0 < sum(len(b) for b, _ in segs) <= 201
+    _, mask = segment_tensors([segs], 200)
+    assert mask.sum() >= 15
+    text = b"".join(b for b, _ in segs)
+    for b, trained in segs:  # every trained recall value appears earlier in its episode
+        if trained and b.isdigit() and len(b) == 2:
+            assert text.count(b) >= 2

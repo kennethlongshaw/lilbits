@@ -165,6 +165,64 @@ def make(task: str, rng: random.Random, level: int = 1) -> TaskExample:
         LEVEL["name_len"] = 8
 
 
+# ---- dense pretraining streams ---------------------------------------------------------------------------------
+# Task problems train 2-3 answer bytes per sequence. These streams make most bytes predictable by one of the ops
+# (recall: pointer to a key, then read its value; copy: pointer stepping along a list; count: filter + count), and
+# mark exactly those bytes as trained, so a sequence carries dozens of targets.
+
+
+def _key(rng: random.Random) -> str:
+    return rng.choice([chr(c) for c in range(65, 91)]) if rng.random() < 0.5 else _names(rng, 1)[0]
+
+
+def recall_episode(rng: random.Random, k: int = 4, n_q: int = 6) -> list[tuple[bytes, bool]]:
+    keys: list[str] = []
+    while len(keys) < k:
+        key = _key(rng)
+        if key not in keys:
+            keys.append(key)
+    vals = {key: f"{rng.randrange(10, 100)}" for key in keys}
+    segs: list[tuple[bytes, bool]] = [(("KV: " + ", ".join(f"{a}={vals[a]}" for a in keys) + " |").encode(), False)]
+    for _ in range(n_q):
+        a = rng.choice(keys)
+        segs += [(f" {a}=".encode(), False), (vals[a].encode(), True)]
+    return [*segs, (b"\n", False)]
+
+
+def copy_episode(rng: random.Random, k: int = 5) -> list[tuple[bytes, bool]]:
+    words = [_key(rng) for _ in range(k)]
+    body = " ".join(words)
+    return [(f"COPY: {body} |".encode(), False), (f" {body}".encode(), True), (b"\n", False)]
+
+
+def count_episode(rng: random.Random, k: int = 6) -> list[tuple[bytes, bool]]:
+    pool = [_key(rng) for _ in range(3)]
+    seq = [rng.choice(pool) for _ in range(k)]
+    segs: list[tuple[bytes, bool]] = [(f"ITEMS: {', '.join(seq)} |".encode(), False)]
+    for a in dict.fromkeys(pool):
+        segs += [(f" #{a}=".encode(), False), (str(seq.count(a)).encode(), True)]
+    return [*segs, (b"\n", False)]
+
+
+EPISODES = {"recall": recall_episode, "copy": copy_episode, "count": count_episode}
+
+
+def dense_stream(rng: random.Random, n_bytes: int) -> list[tuple[bytes, bool]]:
+    """Whole episodes of recall / copy / count, as (bytes, trained) segments, at most n_bytes in total (no episode
+    is cut, so every trained byte has its context)."""
+    segs: list[tuple[bytes, bool]] = []
+    total, misses = 0, 0
+    while misses < 8:
+        ep = EPISODES[rng.choice(list(EPISODES))](rng)
+        n = sum(len(b) for b, _ in ep)
+        if total + n > n_bytes:
+            misses += 1
+            continue
+        segs += ep
+        total += n
+    return segs
+
+
 def score(task: str, answer: str, ex: TaskExample) -> float:
     if task == "path":
         return score_path(answer, ex)
@@ -180,4 +238,4 @@ def chain_match(task: str, trace: list[str]) -> float:
     return float(i == len(groups))
 
 
-__all__ = ["TASKS", "TaskExample", "chain_match", "make", "score", "score_path"]
+__all__ = ["EPISODES", "TASKS", "TaskExample", "chain_match", "dense_stream", "make", "score", "score_path"]
