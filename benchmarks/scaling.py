@@ -547,10 +547,11 @@ def report(rows: list[dict], an: dict, args) -> str:
         if "error" in r:
             lines.append(f"| {r['curve']} | {r['target_mib']} | {r.get('width')} | error: see json |" + " |" * 14)
             continue
+        std = f" ± {r['bpb_std']:.3f}" if r.get("seeds", 1) > 1 else ""
         lines.append(
             f"| {r['curve']} | {r['target_mib']} | {r['width']} | {r['params'] / 1e6:.2f}M | "
             f"{r['deployed_bytes'] / MiB:.2f} | {r['disk_bytes'] / MiB:.2f} | {r['train_last_loss']:.3f} | "
-            f"{r['eval_loss']:.3f} | {r['bpb']:.3f}{f' ± {r['bpb_std']:.3f}' if r.get('seeds', 1) > 1 else ''} | {r['train_step_ms']:.0f} | {r['train_wall_s']:.1f} | "
+            f"{r['eval_loss']:.3f} | {r['bpb']:.3f}{std} | {r['train_step_ms']:.0f} | {r['train_wall_s']:.1f} | "
             f"{r['train_cpu_util']:.2f} | {r['train_peak_rss_mib']:.0f} | "
             f"{r['decode_ms_per_byte']:.2f} | {r['decode_cpu_ms_per_byte']:.2f} | {r['prefill_bytes_per_s']:.0f} | "
             f"{r['infer_peak_rss_mib']:.0f} |"
