@@ -18,3 +18,15 @@ def test_path_scoring_and_chain_match():
     assert chain_match("count", ["attend", "filter", "count", "noop"]) == 1.0
     assert chain_match("count", ["count", "filter"]) == 0.0
     assert chain_match("argmax", ["max", "point"]) == 1.0
+
+
+def test_easy_level_uses_one_letter_names_and_scores():
+    import random
+
+    from lilbits.op_tasks import TASKS, make, score
+
+    rng = random.Random(0)
+    for task in TASKS:
+        e = make(task, rng, level=0)
+        assert score(task, e.answer, e) == 1.0
+        assert len(e.prompt) < 60

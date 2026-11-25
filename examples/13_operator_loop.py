@@ -87,6 +87,7 @@ def add_args(ap):
     ap.add_argument(
         "--problems", type=int, default=4000, help="generated problems per task epoch (SFT); free data, costs time"
     )
+    ap.add_argument("--level", type=int, default=1, choices=[0, 1], help="0: easy curriculum start (1-letter names)")
     ap.add_argument("--no-word-keys", action="store_true", help="set ops address single bytes instead of words")
 
 
@@ -104,19 +105,19 @@ def build(args, meta):
 
 def examples(args, seed: int, n: int):
     rng = random.Random(seed)
-    return [make(args.task, rng) for _ in range(n)]
+    return [make(args.task, rng, args.level) for _ in range(n)]
 
 
 def rows(exs):
     return [[(e.prompt, False), ((e.answer + "\n").encode(), True)] for e in exs]
 
 
-def mixed(seed: int, n: int):
+def mixed(seed: int, n: int, level: int = 1):
     """n problems drawn round-robin from every task, with their expected op chains."""
     rng = random.Random(seed)
     names = list(TASKS)
     tasks = [names[(seed + i) % len(names)] for i in range(n)]
-    return [(t, make(t, rng)) for t in tasks]
+    return [(t, make(t, rng, level)) for t in tasks]
 
 
 def train_fn(models, args, fab):
@@ -158,7 +159,7 @@ def train_fn(models, args, fab):
 
             def warm_batch(i, model=model):
                 model.tau = 1.0 + (args.tau_end - 1.0) * i / max(1, args.warmup_steps - 1)
-                pairs = mixed(10_000 + i, args.batch)
+                pairs = mixed(10_000 + i, args.batch, args.level)
                 x, mk = segment_tensors(rows([e for _, e in pairs]), args.seq)
                 return x, mk, model.op_targets([TASKS[t][1] for t, _ in pairs])
 

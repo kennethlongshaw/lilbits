@@ -6,6 +6,8 @@ averages, so it reports a proportion, not a number), argmax over values (needs a
 (one pointer per output, conditioned on what was already emitted) and shortest paths (repeated pointer hops plus a
 min over path lengths).
 
+`make(task, rng, level=0)` is the curriculum start: one-letter names and fewer items, same formats and op chains.
+
     task      prompt (bytes)                                         answer           expected ops
     lookup    "AGE OF JULIET: ROMEO 17, JULIET 13, ... =>"             13               point / attend (control)
     count     "COUNT ROMEO: ROMEO, JULIET, ROMEO, ... =>"              2                filter -> count
@@ -35,7 +37,12 @@ class TaskExample:
     meta: Any = None
 
 
+LEVEL = {"name_len": 8}  # set by make(level=...): level 0 uses one-letter names
+
+
 def _names(rng: random.Random, k: int) -> list[str]:
+    if LEVEL["name_len"] == 1:
+        return rng.sample([chr(c) for c in range(65, 91)], k)
     pool = [n for n in characters() if len(n) <= 8]
     return rng.sample(pool, k)
 
@@ -137,8 +144,25 @@ TASKS = {
 }
 
 
-def make(task: str, rng: random.Random) -> TaskExample:
-    return TASKS[task][0](rng)
+# level 0: a curriculum start, one-letter names and fewer items (same prompt formats and op chains)
+EASY = {
+    "lookup": {"k": 3},
+    "count": {"k": 4},
+    "argmax": {"k": 3},
+    "sort": {"k": 3},
+    "path": {"n_nodes": 4, "n_edges": 4},
+}
+
+
+def make(task: str, rng: random.Random, level: int = 1) -> TaskExample:
+    """One problem. level 1: the full task; level 0: the easy curriculum start (EASY)."""
+    if level >= 1:
+        return TASKS[task][0](rng)
+    LEVEL["name_len"] = 1
+    try:
+        return TASKS[task][0](rng, **EASY[task])
+    finally:
+        LEVEL["name_len"] = 8
 
 
 def score(task: str, answer: str, ex: TaskExample) -> float:
