@@ -62,6 +62,14 @@ def add_args(ap):
     ap.add_argument("--mtp", type=int, default=2)
     ap.add_argument("--qa-steps", type=int, default=4, help="instruct stage: steps on Shakespeare QA pairs")
     ap.add_argument("--qa-eval", type=int, default=16, help="test: held-out QA pairs scored by exact match")
+    ap.add_argument("--eval-seqs", type=int, default=8, help="test: held-out byte sequences for bits per byte")
+    ap.add_argument(
+        "--epochs",
+        type=float,
+        default=0.0,
+        help="> 0: set --steps / --qa-steps to cover this many passes over the train bytes and QA pairs",
+    )
+    ap.add_argument("--schedule", default="constant", choices=["constant", "cosine"])
     ap.add_argument("--prompt", type=int, default=128, help="infer: prompt bytes")
     ap.add_argument("--gen", type=int, default=64, help="infer: bytes to decode")
     ap.add_argument("--kernel", default="native", choices=["native", "lut"])
@@ -115,6 +123,11 @@ def train_fn(models, args, fab):
     qa = load_qa("train")
     pocket = models["pocket"]
     out: dict = {}
+    n_stages = 2 if args.core == "littlebit" else 1
+    if args.epochs > 0:  # an "epoch" = as many sampled bytes as the train split holds (windows are random)
+        args.steps = max(1, round(args.epochs * len(src.data) / (args.batch * args.seq) / n_stages))
+        args.qa_steps = max(1, round(args.epochs * len(qa) / args.batch))
+    out["schedule"] = {"steps_per_stage": args.steps, "qa_steps": args.qa_steps, "lr": args.schedule}
     stages = [("1 FP core", False)] + ([("2 LittleBit core", True)] if args.core == "littlebit" else [])
     for name, convert in stages:
         if convert:
@@ -127,6 +140,7 @@ def train_fn(models, args, fab):
                 lambda mod, x: pocket.training_loss(x),
                 args.steps,
                 lr=2e-3,
+                schedule=args.schedule,
             )
         out[f"pocket: {name}"] = {**info, **m.as_dict(), "step_ms": m.wall_s / max(1, args.steps) * 1e3}
 
@@ -134,15 +148,33 @@ def train_fn(models, args, fab):
         return qa_tensors([qa[(i * args.batch + j) % len(qa)] for j in range(args.batch)], args.seq)
 
     with Meter() as m:  # instruct stage: loss on answer bytes only
-        info = fit(fab, pocket, qa_batch, lambda mod, b: pocket.training_loss(b[0], mask=b[1]), args.qa_steps, lr=1e-3)
+        info = fit(
+            fab,
+            pocket,
+            qa_batch,
+            lambda mod, b: pocket.training_loss(b[0], mask=b[1]),
+            args.qa_steps,
+            lr=1e-3,
+            schedule=args.schedule,
+        )
     out["pocket: 3 QA instruct"] = {**info, **m.as_dict()}
     steps = args.steps * len(stages)
     base = models["fp16_same_size"]
     with Meter() as m:
-        info = fit(fab, base, lambda _: src.sample(args.batch, args.seq), baseline_loss, steps, lr=2e-3)
+        info = fit(
+            fab, base, lambda _: src.sample(args.batch, args.seq), baseline_loss, steps, lr=2e-3, schedule=args.schedule
+        )
     out["fp16_same_size"] = {**info, **m.as_dict(), "step_ms": m.wall_s / max(1, steps) * 1e3}
     with Meter() as m:
-        info = fit(fab, base, qa_batch, lambda mod, b: baseline_loss(mod, b[0], b[1]), args.qa_steps, lr=1e-3)
+        info = fit(
+            fab,
+            base,
+            qa_batch,
+            lambda mod, b: baseline_loss(mod, b[0], b[1]),
+            args.qa_steps,
+            lr=1e-3,
+            schedule=args.schedule,
+        )
     out["fp16_same_size: QA instruct"] = {**info, **m.as_dict()}
     return out, {
         "core_converted": args.core == "littlebit",
@@ -151,7 +183,7 @@ def train_fn(models, args, fab):
 
 
 def held_out(args) -> torch.Tensor:
-    return ShakespeareBytes("test", seed=123).sample(8, args.seq)
+    return ShakespeareBytes("test", seed=123).sample(args.eval_seqs, args.seq)
 
 
 def answerer(generate, max_bytes: int = 48):

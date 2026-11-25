@@ -49,6 +49,8 @@ def add_args(ap):
     ap.add_argument("--seq", type=int, default=200)
     ap.add_argument("--tau-end", type=float, default=0.3)
     ap.add_argument("--eval", type=int, default=6)
+    ap.add_argument("--epochs", type=float, default=0.0, help="> 0: steps = epochs x 4000 examples / batch")
+    ap.add_argument("--schedule", default="constant", choices=["constant", "cosine"])
 
 
 def build(args, meta):
@@ -69,8 +71,10 @@ def rows(args, seed: int, n: int, split: str):
 
 
 def train_fn(models, args, fab):
-    out = {}
+    out: dict = {}
     g = torch.Generator().manual_seed(args.seed)
+    if args.epochs > 0:
+        args.steps = max(1, round(args.epochs * 4000 / args.batch))
     for name, model in models.items():
 
         def batch(i, model=model):
@@ -79,7 +83,13 @@ def train_fn(models, args, fab):
 
         with Meter() as m:
             info = fit(
-                fab, model, batch, lambda mod, b, model=model: model.loss(b[0], b[1], generator=g), args.steps, lr=2e-3
+                fab,
+                model,
+                batch,
+                lambda mod, b, model=model: model.loss(b[0], b[1], generator=g),
+                args.steps,
+                lr=2e-3,
+                schedule=args.schedule,
             )
         out[name] = {**info, **m.as_dict()}
     return out, {}

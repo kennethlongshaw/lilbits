@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -167,19 +168,39 @@ def fit(
     optimizer: torch.optim.Optimizer | None = None,
     clip: float | None = 1.0,
     after_step: Callable[[], None] | None = None,
+    schedule: str = "constant",
+    warmup: float = 0.05,
 ) -> dict:
-    """Standard Fabric training loop: setup, forward, fab.backward, clip, step. Returns the last step's info."""
+    """Standard Fabric training loop: setup, forward, fab.backward, clip, step. Returns the last step's info, and
+    for runs of 20+ steps a loss curve (mean loss over 10 equal spans). schedule="cosine": linear warmup over the
+    first `warmup` fraction of steps, then cosine decay to 10% of lr."""
     opt = optimizer or torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr, betas=(0.9, 0.95))
     wrapped, opt = fab.setup(model, opt)
+    base = [g["lr"] for g in opt.param_groups]
+    n_warm = max(1, int(warmup * steps))
     info: dict = {}
     loss = torch.zeros(())
+    losses: list[float] = []
     for step in range(steps):
+        if schedule == "cosine":
+            f = (
+                (step + 1) / n_warm
+                if step < n_warm
+                else 0.1 + 0.45 * (1 + math.cos(math.pi * (step - n_warm) / max(1, steps - n_warm)))
+            )
+            for g, b in zip(opt.param_groups, base, strict=True):
+                g["lr"] = b * f
         loss, info = loss_fn(wrapped, fab.to_device(batch_fn(step)))
         opt.zero_grad(set_to_none=True)
         fab.backward(loss)
         if clip:
             fab.clip_gradients(wrapped, opt, max_norm=clip)
         opt.step()
+        losses.append(loss.item())
         if after_step is not None:
             after_step()
-    return {"steps": steps, "last_loss": loss.item(), **info}
+    out = {"steps": steps, "last_loss": loss.item(), **info}
+    if steps >= 20:
+        span = steps // 10
+        out["loss_curve"] = [sum(losses[i * span : (i + 1) * span]) / span for i in range(10)]
+    return out
