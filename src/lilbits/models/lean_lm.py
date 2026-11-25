@@ -14,11 +14,13 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import cast
 
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from lilbits.layers.littlebit import LittleBitLinear
 from lilbits.models.decision import StatefulBlock, clone_states
@@ -33,6 +35,9 @@ class LeanLM(nn.Module):
         nn.init.normal_(self.embed.weight, std=0.02)
         self.blocks = nn.ModuleList(StatefulBlock(d, n_heads, linear, "gdn") for _ in range(n_layers))
         self.norm = nn.RMSNorm(d)
+        # grad_ckpt: recompute each block in backward. LittleBit training keeps sign and scaled-factor copies of
+        # every latent per forward (memory ~ latents, not batch); checkpointing keeps one block's copies alive.
+        self.grad_ckpt = False
         # draft head j: h + B_j A_j h (rank draft_rank, B zero init: every draft starts as the next-byte prediction).
         # Low rank keeps the heads a few percent of the deployed bytes instead of n_draft x d^2 FP16 weights.
         r = min(draft_rank, d)
@@ -49,8 +54,12 @@ class LeanLM(nn.Module):
         x = self.embed(tokens)
         new = []
         kw = {"all_states": True} if all_states else {}
+        ckpt = self.grad_ckpt and self.training and torch.is_grad_enabled()
         for blk, s in zip(self.blocks, states, strict=True):
-            x, s = blk(x, s, **kw)
+            if ckpt:
+                x, s = checkpoint(partial(blk, **kw), x, s, use_reentrant=False)
+            else:
+                x, s = blk(x, s, **kw)
             new.append(s)
         return self.norm(x), new
 

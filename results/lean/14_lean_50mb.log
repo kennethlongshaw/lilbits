@@ -1,0 +1,35 @@
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+== train ==
+  lean                             {fp_phase: {}, converted_layers: 64, convert_s: 302.3, steps: 300, last_loss: 2.469, ce: 1.64, mtp_ce: 2.765, loss_curve: [5.162269481023153, 3.5459243853886924, 3.3407244523366293, 3.1931508143742877, 3.0490136702855426, 2.972440973917643, 2.8525622288386026, 2.758519728978475, 2.666818149884542, 2.6025351524353026], wall_s: 3784, cpu_s: 1.477e+04, cpu_util: 3.903, peak_extra_mib: 4598, width: 2560}
+  fp16_size                        {steps: 300, last_loss: 1.688, ce: 1.688, loss_curve: [3.147781586647034, 2.391129994392395, 2.2912195920944214, 2.175414474805196, 2.0699642062187196, 2.0524052381515503, 1.9508110642433167, 1.887249724070231, 1.830911139647166, 1.7845669746398927], wall_s: 288.2, cpu_s: 1135, cpu_util: 3.938, peak_extra_mib: 1678, width: 496}
+  wall_s                           4072
+  cpu_s                            1.59e+04
+  cpu_util                         3.905
+  peak_extra_mib                   4612
+
+== test ==
+  lean                             {bpb: 2.688}
+  fp16_size                        {bpb: 2.7}
+  wall_s                           19.72
+  cpu_s                            78.26
+  cpu_util                         3.969
+  peak_extra_mib                   2015
+
+== infer ==
+  lut_kernel                       {compiled: True, simd: 512}
+  threads                          4
+  lean                             {packed_lut_bpb: 2.677, prefill_bytes_per_s: 352.1, greedy_ms_per_byte: 24.73, speculative_ms_per_byte: 32.11, speculative_speedup: 0.77, speculative_equals_greedy: True, rounds: 70, model_calls: 70, bytes_per_call: 1.829, draft_acceptance: 0.2762, replay_rollback: {ms_per_byte: 42.27, equals_greedy: True, rounds: 70, model_calls: 139, bytes_per_call: 0.9209, draft_acceptance: 0.2762}, state_bytes: 10485760, attention_kv_bytes_same_length_fp16: 52428800, sample: CHIO:
+What the with the with the with the with the with the , wall_s: 20.83, cpu_s: 82.93, cpu_util: 3.981, peak_extra_mib: 534.1}
+  fp16_size                        {prefill_bytes_per_s: 2309, greedy_ms_per_byte: 9.546, state_bytes: 3936256, attention_kv_bytes_same_length_fp16: 10158080, sample: T:
+What the will the will the come the come the come the com, wall_s: 1.497, cpu_s: 5.96, cpu_util: 3.981, peak_extra_mib: 28.24}
+  wall_s                           22.74
+  cpu_s                            89.33
+  cpu_util                         3.929
+  peak_extra_mib                   534.2
+
+== size ==
+  lean                             {params: 2072384, weight_ram_bytes: 56079968, deployed_bytes: 5.194e+07}
+  fp16_size                        {params: 25719120, weight_ram_bytes: 102876480, deployed_bytes: 5.144e+07}
+  checkpoint_file_bytes            1554168171
+METRICS {"example": "14_lean_lm", "mode": "all", "train": {"lean": {"fp_phase": {}, "converted_layers": 64, "convert_s": 302.31730369700017, "steps": 300, "last_loss": 2.4691834449768066, "ce": 1.6397526264190674, "mtp_ce": 2.7647693157196045, "loss_curve": [5.162269481023153, 3.5459243853886924, 3.3407244523366293, 3.1931508143742877, 3.0490136702855426, 2.972440973917643, 2.8525622288386026, 2.758519728978475, 2.666818149884542, 2.6025351524353026], "wall_s": 3783.6858683680002, "cpu_s": 14766.113731078, "cpu_util": 3.9025739040664598, "peak_extra_mib": 4598.484375, "width": 2560}, "fp16_size": {"steps": 300, "last_loss": 1.6879411935806274, "ce": 1.6879411935806274, "loss_curve": [3.147781586647034, 2.391129994392395, 2.2912195920944214, 2.175414474805196, 2.0699642062187196, 2.0524052381515503, 1.9508110642433167, 1.887249724070231, 1.830911139647166, 1.7845669746398927], "wall_s": 288.15260415599914, "cpu_s": 1134.822057895999, "cpu_util": 3.938267576029376, "peak_extra_mib": 1677.53515625, "width": 496}, "wall_s": 4072.2386789899997, "cpu_s": 15901.371716909001, "cpu_util": 3.904823113377253, "peak_extra_mib": 4612.25390625}, "test": {"lean": {"bpb": 2.687950601930068}, "fp16_size": {"bpb": 2.700212513482128}, "wall_s": 19.718266519999816, "cpu_s": 78.2557801619987, "cpu_util": 3.9686947167807847, "peak_extra_mib": 2014.8359375}, "infer": {"lut_kernel": {"compiled": true, "simd": 512}, "threads": 4, "lean": {"packed_lut_bpb": 2.677041183442225, "prefill_bytes_per_s": 352.11166821028525, "greedy_ms_per_byte": 24.725392468752716, "speculative_ms_per_byte": 32.11165503906699, "speculative_speedup": 0.7699818785008696, "speculative_equals_greedy": true, "rounds": 70, "model_calls": 70, "bytes_per_call": 1.8285714285714285, "draft_acceptance": 0.2761904761904762, "replay_rollback": {"ms_per_byte": 42.27387864062848, "equals_greedy": true, "rounds": 70, "model_calls": 139, "bytes_per_call": 0.920863309352518, "draft_acceptance": 0.2761904761904762}, "state_bytes": 10485760, "attention_kv_bytes_same_length_fp16": 52428800, "sample": "CHIO:\nWhat the with the with the with the with the with the ", "wall_s": 20.82959438099988, "cpu_s": 82.9328852409999, "cpu_util": 3.9814930489788485, "peak_extra_mib": 534.13671875}, "fp16_size": {"prefill_bytes_per_s": 2309.3787370663003, "greedy_ms_per_byte": 9.546199804688627, "state_bytes": 3936256, "attention_kv_bytes_same_length_fp16": 10158080, "sample": "T:\nWhat the will the will the come the come the come the com", "wall_s": 1.496930130999317, "cpu_s": 5.959882335999282, "cpu_util": 3.981403148068506, "peak_extra_mib": 28.2421875}, "wall_s": 22.73630619600044, "cpu_s": 89.3317052099992, "cpu_util": 3.929033346046052, "peak_extra_mib": 534.171875}, "size": {"lean": {"params": 2072384, "weight_ram_bytes": 56079968, "deployed_bytes": 51935200.0}, "fp16_size": {"params": 25719120, "weight_ram_bytes": 102876480, "deployed_bytes": 51438240.0}, "checkpoint_file_bytes": 1554168171}}

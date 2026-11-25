@@ -87,3 +87,15 @@ def test_gdn_all_states_last_equals_final():
     o1, s1 = g(x, return_state=True)
     o2, s2 = g(x, return_state=True, all_states=True)
     assert s2.shape[1] == 6 and torch.allclose(s2[:, -1], s1, atol=1e-5) and torch.allclose(o1, o2, atol=1e-5)
+
+
+def test_grad_ckpt_same_gradients():
+    m = make(5).train()
+    x = torch.randint(0, 256, (2, 20))
+    m.loss(x)[0].backward()
+    ref = [p.grad.clone() for p in m.parameters() if p.grad is not None]
+    m.zero_grad()
+    m.grad_ckpt = True
+    m.loss(x)[0].backward()
+    got = [p.grad for p in m.parameters() if p.grad is not None]
+    assert all(torch.allclose(a, b, atol=1e-6) for a, b in zip(ref, got, strict=True))

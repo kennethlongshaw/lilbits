@@ -19,6 +19,7 @@ uv run python examples/14_lean_lm.py --mode infer --gen 256
 
 from __future__ import annotations
 
+import gc
 import math
 import time
 
@@ -27,6 +28,7 @@ from torch import nn
 
 from lilbits.inference.lut import kernel_info, pack_lut
 from lilbits.inference.packed import pack_model
+from lilbits.layers.littlebit import LittleBitLinear
 from lilbits.measure import Meter, size_report
 from lilbits.models.lean_lm import LeanLM, convert_linears
 from lilbits.models.stateful_lm import state_bytes
@@ -39,12 +41,16 @@ FP = nn.Linear
 def add_args(ap):
     ap.add_argument("--d", type=int, default=256, help="lean width")
     ap.add_argument("--heads", type=int, default=4)
+    ap.add_argument("--head-dim", type=int, default=0, help="> 0: heads = width // head-dim (overrides --heads)")
+    ap.add_argument("--baselines", default="size,width", help="FP16 baselines to train: size, width (comma list)")
     ap.add_argument("--layers", type=int, default=4)
     ap.add_argument("--bpw", type=float, default=0.55, help="LittleBit bits per weight of the block linears")
     ap.add_argument("--drafts", type=int, default=3, help="MTP draft heads (speculative bytes per round)")
     ap.add_argument("--draft-rank", type=int, default=32, help="rank of each low-rank draft head")
     ap.add_argument("--mtp-weight", type=float, default=0.3)
     ap.add_argument("--steps", type=int, default=30, help="training steps per model (default: smoke run)")
+    ap.add_argument("--grad-ckpt", action="store_true", help="lean: recompute each block in backward (big widths)")
+    ap.add_argument("--itq", type=int, default=50, help="Joint-ITQ iterations in the LittleBit conversion")
     ap.add_argument("--fp-frac", type=float, default=0.3, help="lean: share of steps in FP before conversion")
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--seq", type=int, default=256)
@@ -54,15 +60,30 @@ def add_args(ap):
     ap.add_argument("--gen", type=int, default=128, help="infer: bytes to decode")
 
 
+def _heads(args, d: int) -> int:
+    if not getattr(args, "head_dim", 0):
+        return args.heads
+    h = max(1, d // args.head_dim)
+    while d % h:
+        h -= 1
+    return h
+
+
 def _fp(d: int, args, drafts: int = 0) -> LeanLM:
     return LeanLM(
-        d, args.heads, args.layers, lambda i, o: FP(i, o, bias=False), n_draft=drafts, draft_rank=args.draft_rank
+        d, _heads(args, d), args.layers, lambda i, o: FP(i, o, bias=False), n_draft=drafts, draft_rank=args.draft_rank
     )
 
 
-def _lean(args, itq_iters: int = 0) -> LeanLM:
-    m = _fp(args.d, args, args.drafts)
-    convert_linears(m, args.bpw, itq_iters=itq_iters)
+def _shell(m: LeanLM, bpw: float) -> LeanLM:
+    """Swap the block linears for untrained LittleBit layers of the same shapes (no SVD): for loading a converted
+    checkpoint and for sizing on the meta device."""
+    for parent in m.blocks.modules():
+        for name, c in list(parent.named_children()):
+            if isinstance(c, nn.Linear) and c.out_features >= 32:
+                setattr(
+                    parent, name, LittleBitLinear(c.in_features, c.out_features, bpw=bpw, residual=True, ste="clipped")
+                )
     return m
 
 
@@ -71,19 +92,32 @@ def deployed(m: nn.Module) -> float:
 
 
 def matched_width(args) -> int:
-    """FP width (multiple of heads) whose deployed FP16 bytes are closest to lean's as deployed (LUT-packed)."""
-    target = deployed(pack_lut(pack_model(_lean(args))))
-    step = args.heads
-    return min(range(step, args.d + step, step), key=lambda w: abs(deployed(_fp(w, args)) - target))
+    """FP width (multiple of 8) whose deployed FP16 bytes are closest to lean's, sized on the meta device."""
+    with torch.device("meta"):
+        target = deployed(_shell(_fp(args.d, args, args.drafts), args.bpw))
+
+        def size(w: int) -> float:
+            return deployed(_fp(w, args))
+
+        lo, hi = 1, args.d // 8  # deployed bytes grow with width: binary search on width / 8
+        while lo < hi:
+            mid = (lo + hi) // 2
+            lo, hi = (mid + 1, hi) if size(8 * mid) < target else (lo, mid)
+        return min((8 * max(1, lo - 1), 8 * lo), key=lambda w: abs(size(w) - target))
 
 
 def build(args, meta):
-    lean = _lean(args) if meta.get("converted") else _fp(args.d, args, args.drafts)
-    return {
-        "lean": lean,
-        "fp16_size": _fp(meta.get("fp_d") or matched_width(args), args),
-        "fp16_width": _fp(args.d, args),
-    }
+    if meta.get("converted"):
+        lean = _shell(_fp(args.d, args, args.drafts), args.bpw)
+    else:
+        lean = _fp(args.d, args, args.drafts)
+    models = {"lean": lean}
+    base = getattr(args, "baselines", "size,width").split(",")
+    if "size" in base:
+        models["fp16_size"] = _fp(meta.get("fp_d") or matched_width(args), args)
+    if "width" in base:
+        models["fp16_width"] = _fp(args.d, args)
+    return models
 
 
 def bpb(model: LeanLM, batches) -> float:
@@ -94,6 +128,12 @@ def bpb(model: LeanLM, batches) -> float:
 def held_out(args):
     src = ShakespeareBytes("test", seed=999)
     return [src.sample(args.batch, args.seq) for _ in range(args.eval_batches)]
+
+
+def adamw(m: nn.Module, args) -> torch.optim.Optimizer:
+    """AdamW without the multi-tensor path: foreach builds whole-model temporaries, which at ~50 MB deployed
+    (~360M LittleBit latents) pushed peak RAM past 14 GB."""
+    return torch.optim.AdamW(m.parameters(), lr=args.lr, betas=(0.9, 0.95), foreach=False)
 
 
 def train_fn(models, args, fab):
@@ -110,25 +150,26 @@ def train_fn(models, args, fab):
 
         with Meter() as mt:
             if name == "lean":
-                n_fp = max(1, round(args.fp_frac * args.steps))
-                fp_info = fit(fab, m, batch, loss, n_fp, lr=args.lr, schedule="cosine")
+                n_fp = round(args.fp_frac * args.steps)
+                fp_info = (
+                    fit(fab, m, batch, loss, n_fp, lr=args.lr, schedule="cosine", optimizer=adamw(m, args))
+                    if n_fp
+                    else {}
+                )
                 t = time.perf_counter()
-                n_conv = convert_linears(m, args.bpw)
+                n_conv = convert_linears(m, args.bpw, itq_iters=args.itq)
                 conv_s = time.perf_counter() - t
+                gc.collect()  # the dense FP weights the conversion replaced
+                m.grad_ckpt = args.grad_ckpt
                 info = fit(
-                    fab,
-                    m,
-                    batch,
-                    loss,
-                    args.steps - n_fp,
-                    lr=args.lr,
-                    schedule="cosine",
+                    fab, m, batch, loss, args.steps - n_fp, lr=args.lr, schedule="cosine", optimizer=adamw(m, args)
                 )
                 info = {"fp_phase": fp_info, "converted_layers": n_conv, "convert_s": conv_s, **info}
             else:
-                info = fit(fab, m, batch, loss, args.steps, lr=args.lr, schedule="cosine")
+                info = fit(fab, m, batch, loss, args.steps, lr=args.lr, schedule="cosine", optimizer=adamw(m, args))
         out[name] = {**info, **mt.as_dict(), "width": m.embed.embedding_dim}
-    return out, {"converted": True, "fp_d": models["fp16_size"].embed.embedding_dim}
+    fp = models.get("fp16_size")
+    return out, {"converted": True, "fp_d": fp.embed.embedding_dim if fp is not None else None}
 
 
 def test_fn(models, args):
