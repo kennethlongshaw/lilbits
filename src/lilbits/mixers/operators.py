@@ -52,11 +52,39 @@ def gumbel_probs(logits: torch.Tensor, tau: float, hard: bool, generator=None, s
     return y
 
 
+def is_word_byte(x: torch.Tensor) -> torch.Tensor:
+    """ASCII letters and digits (names, numbers); everything else separates words."""
+    return ((x >= 48) & (x <= 57)) | ((x >= 65) & (x <= 90)) | ((x >= 97) & (x <= 122))
+
+
+def word_pool(ctx: torch.Tensor, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Word-level keys over bytes x (B, T) with context ctx (B, T, d). Returns (wctx, wend): wctx[s] is the mean of
+    ctx over the word containing s up to s (ctx itself on separator bytes); wend[s] marks the last byte of a word,
+    known only once byte s + 1 is seen (the final position is never marked). A query at t may use word ends s < t,
+    so this stays causal."""
+    w = is_word_byte(x)
+    start = w & ~F.pad(w[:, :-1], (1, 0), value=False)  # first byte of each word
+    seg = torch.cumsum(start.long() | (~w).long(), 1)  # a new segment at every word start and every separator
+    csum = torch.cumsum(ctx, 1)
+    cnt = torch.arange(1, x.shape[1] + 1, device=x.device).expand_as(seg)
+    # segment start index for each position: last index where seg changed
+    change = F.pad(seg[:, 1:] != seg[:, :-1], (1, 0), value=True)
+    idx = torch.where(change, torch.arange(x.shape[1], device=x.device).expand_as(seg), torch.zeros_like(seg))
+    first = torch.cummax(idx, 1).values
+    before = torch.where(first[..., None] > 0, csum.gather(1, (first - 1).clamp_min(0)[..., None].expand_as(ctx)), 0)
+    wctx = (csum - before) / (cnt - first)[..., None].to(ctx)
+    wend = w & ~F.pad(w[:, 1:], (0, 1), value=True)  # next byte is a separator (unknown at the last position)
+    return wctx, wend
+
+
 class OperatorLoop(nn.Module):
     """One shared instruction step: route, run the typed ops, write registers and h."""
 
-    def __init__(self, d: int, n_loops: int, ops=ALL_OPS, n_set: int = 2, n_vec: int = 2, k: int = 4):
+    def __init__(
+        self, d: int, n_loops: int, ops=ALL_OPS, n_set: int = 2, n_vec: int = 2, k: int = 4, word_keys: bool = False
+    ):
         super().__init__()
+        self.word_keys = word_keys  # set ops (filter / point / topk and the aggregates over S) address whole words
         self.ops = tuple(ops)
         for o in self.ops:
             assert o in ALL_OPS, o
@@ -73,6 +101,8 @@ class OperatorLoop(nn.Module):
         self.summary_k = nn.Linear(d, d, bias=False)
         self.summary_o = nn.Linear(d, d, bias=False)
         nn.init.zeros_(self.summary_o.weight)
+        self.summary_q_in = nn.Linear(d, d, bias=False)  # the task summary also feeds every op's query
+        nn.init.zeros_(self.summary_q_in.weight)
         self.q = nn.Linear(d, d, bias=False)
         self.k_proj = nn.Linear(d, d, bias=False)
         self.v_proj = nn.Linear(d, d, bias=False)
@@ -96,16 +126,21 @@ class OperatorLoop(nn.Module):
         a = a[:, None, :].expand(-1, causal.shape[0], -1).masked_fill(~causal, float("-inf"))
         return a.softmax(-1) @ ctx
 
-    def forward(self, h, ctx, regs, loop: int, tau: float = 1.0, hard: bool = False, generator=None, st=False):
+    def forward(
+        self, h, ctx, regs, loop: int, tau: float = 1.0, hard: bool = False, generator=None, st=False, words=None
+    ):
         """h (B, T, d) hidden of the last T positions; ctx (B, Tk, d) scanned context (Tk >= T); regs (sets
         (B, T, Tk), vecs (B, T, d)). Returns h, regs, probs dict.
         st=True trains with straight-through one-hot routing: only ops some position picked are computed (the
-        soft path computes every op at every loop), at the price of a biased router gradient."""
+        soft path computes every op at every loop), at the price of a biased router gradient.
+        words: (wctx, wend) from `word_pool` over the full context; with word_keys, SET ops score and aggregate
+        word-end positions (keys and values pooled over each word) instead of single bytes."""
         B, T, d = h.shape
         Tk = ctx.shape[1]  # context may be longer than the queries: h holds the last T positions (cached decode)
         sets, vecs = regs
         causal = (torch.arange(T, device=h.device)[:, None] + Tk - T) >= torch.arange(Tk, device=h.device)[None]
-        z = self.norm(h) + self.loop_emb.weight[loop] + self.summary_o(self.task_summary(ctx, causal))
+        summary = self.task_summary(ctx, causal)
+        z = self.norm(h) + self.loop_emb.weight[loop] + self.summary_o(summary)
         parts = self.router(z).split(self.sizes, -1)
         p_op, p_sin, p_vin, p_sdst, p_vdst = (gumbel_probs(x, tau, hard, generator, st) for x in parts)
         chosen = p_op.detach().flatten(0, -2).amax(0) > 0.5 if (hard or st) else None
@@ -113,29 +148,39 @@ class OperatorLoop(nn.Module):
         vin_all = [h, *vecs]
         vin = sum(p_vin[..., j, None] * vin_all[j] for j in range(self.n_vec + 1))
         K, V = self.k_proj(ctx), self.v_proj(ctx)
-        q = self.q(vin)
+        q = self.q(vin) + self.summary_q_in(summary)  # e.g. a filter at the answer slot can match the queried name
         score = torch.einsum("btd,bsd->bts", q, K) / math.sqrt(d)
         score = score.masked_fill(~causal, float("-inf"))
+        set_mask, set_score, Vs = causal, score, V
+        if self.word_keys and words is not None:
+            wctx, wend = words
+            strict = (torch.arange(T, device=h.device)[:, None] + Tk - T) > torch.arange(Tk, device=h.device)[None]
+            set_mask = strict[None] & wend[:, None, :]  # (B, T, Tk): completed words before the query
+            set_score = (torch.einsum("btd,bsd->bts", q, self.k_proj(wctx)) / math.sqrt(d)).masked_fill(
+                ~set_mask, float("-inf")
+            )
+            Vs = self.v_proj(wctx)
         out_set, out_vec = {}, {}
         for i_op, name in enumerate(self.ops):
             if chosen is not None and not bool(chosen[i_op]):
                 continue  # hard / straight-through routing: run only the ops some position chose
             if name == "filter":
-                out_set[name] = torch.sigmoid(score + self.filter_bias).masked_fill(~causal, 0.0)
+                out_set[name] = torch.sigmoid(set_score + self.filter_bias).masked_fill(~set_mask, 0.0)
             elif name == "point":
-                out_set[name] = score.softmax(-1)
+                any_ok = set_mask.any(-1, keepdim=True)
+                out_set[name] = torch.where(any_ok, set_score.masked_fill(~any_ok, 0.0).softmax(-1), 0.0)
             elif name == "topk":
                 kk = min(self.k, Tk)
-                idx = S.masked_fill(~causal, -1.0).topk(kk, -1).indices
-                keep = torch.zeros_like(S).scatter(-1, idx, 1.0) * causal
+                idx = S.masked_fill(~set_mask, -1.0).topk(kk, -1).indices
+                keep = torch.zeros_like(S).scatter(-1, idx, 1.0) * set_mask
                 out_set[name] = S * keep + (S - S.detach()) * (1 - keep)  # forward: masked; grad: through S
             elif name == "sum":
-                out_vec[name] = self.o(S @ V)
+                out_vec[name] = self.o(S @ Vs)
             elif name == "mean":
-                out_vec[name] = self.o((S @ V) / S.sum(-1, keepdim=True).clamp_min(1e-6))
+                out_vec[name] = self.o((S @ Vs) / S.sum(-1, keepdim=True).clamp_min(1e-6))
             elif name == "max":
                 w = S.unsqueeze(-1)
-                m = (V.unsqueeze(1) * w + (w - 1) * 1e4).amax(2)  # positions off in S cannot win
+                m = (Vs.unsqueeze(1) * w + (w - 1) * 1e4).amax(2)  # positions off in S cannot win
                 out_vec[name] = self.o(m * (S.sum(-1, keepdim=True) > 0))
             elif name == "count":
                 out_vec[name] = S.sum(-1, keepdim=True) * self.count_u
@@ -169,4 +214,4 @@ class OperatorLoop(nn.Module):
         return len(self.ops) * (mean**2).sum()
 
 
-__all__ = ["ALL_OPS", "SET_OPS", "VEC_OPS", "OperatorLoop", "gumbel_probs"]
+__all__ = ["ALL_OPS", "SET_OPS", "VEC_OPS", "OperatorLoop", "gumbel_probs", "is_word_byte", "word_pool"]

@@ -5,7 +5,9 @@ max, count, attend, mix, noop), which SET / VEC registers it reads, and where it
 result into the hidden state. Loops chain into small programs. Training routes softly (Gumbel-softmax, every op runs;
 temperature annealed from 1 to --tau-end) with a load-balance loss; --route st is straight-through (one-hot
 forward, only ops some position chose run; so far it neither trains nor saves time, see results/epoch_runs).
-Inference routes hard with a decode cache and records the op trace.
+Inference routes hard with a decode cache and records the op trace. SET ops (filter, point, topk and the aggregates
+over a set) address whole words: keys and values are pooled over each word and only completed words are
+candidates, so a predicate can match a multi-byte name (--no-word-keys: single bytes).
 
 Training stages (each model gets the same):
     pretrain  next-byte LM on the Shakespeare corpus (--pretrain-steps), so the encoder, ops and router start from
@@ -78,14 +80,23 @@ def add_args(ap):
         "--epochs",
         type=float,
         default=0.0,
-        help="> 0: pretrain = epochs x corpus / (batch x seq) steps; warm-up and SFT = epochs x 4000 examples / batch",
+        help="> 0: pretrain = epochs x corpus / (batch x seq) steps; warm-up = epochs x 4000 problems / batch; SFT = "
+        "epochs x --problems / batch",
     )
     ap.add_argument("--schedule", default="constant", choices=["constant", "cosine"])
+    ap.add_argument(
+        "--problems", type=int, default=4000, help="generated problems per task epoch (SFT); free data, costs time"
+    )
+    ap.add_argument("--no-word-keys", action="store_true", help="set ops address single bytes instead of words")
 
 
 def build(args, meta):
     torch.manual_seed(args.seed)
-    models = {"ops": OpLoopLM(args.d, args.loops), "attend": OpLoopLM(args.d, args.loops, ops=("attend",))}
+    wk = not getattr(args, "no_word_keys", False)
+    models = {
+        "ops": OpLoopLM(args.d, args.loops, word_keys=wk),
+        "attend": OpLoopLM(args.d, args.loops, ops=("attend",)),
+    }
     for m in models.values():
         m.st = getattr(args, "route", "soft") == "st"
     return models
@@ -113,7 +124,8 @@ def train_fn(models, args, fab):
     g = torch.Generator().manual_seed(args.seed)
     if args.epochs > 0:
         args.pretrain_steps = max(1, round(args.epochs * len(text_of("train")) / (args.batch * args.seq)))
-        args.warmup_steps = args.steps = max(1, round(args.epochs * 4000 / args.batch))
+        args.warmup_steps = max(1, round(args.epochs * 4000 / args.batch))
+        args.steps = max(1, round(args.epochs * args.problems / args.batch))
     from pathlib import Path
 
     seeded = bool(args.init) and Path(args.init).exists()

@@ -11,18 +11,27 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from lilbits.mixers.operators import ALL_OPS, OperatorLoop
+from lilbits.mixers.operators import ALL_OPS, OperatorLoop, word_pool
 from lilbits.models.decision import StatefulBlock
 
 
 class OpLoopLM(nn.Module):
-    def __init__(self, d: int = 128, n_loops: int = 4, ops=ALL_OPS, heads: int = 2, n_set: int = 2, n_vec: int = 2):
+    def __init__(
+        self,
+        d: int = 128,
+        n_loops: int = 4,
+        ops=ALL_OPS,
+        heads: int = 2,
+        n_set: int = 2,
+        n_vec: int = 2,
+        word_keys: bool = True,
+    ):
         super().__init__()
         self.n_loops = n_loops
         self.embed = nn.Embedding(256, d)
         nn.init.normal_(self.embed.weight, std=0.02)
         self.encoder = StatefulBlock(d, heads, partial(nn.Linear, bias=False))
-        self.loop = OperatorLoop(d, n_loops, ops, n_set, n_vec)
+        self.loop = OperatorLoop(d, n_loops, ops, n_set, n_vec, word_keys=word_keys)
         self.norm = nn.RMSNorm(d)
         self.tau, self.hard = 1.0, False  # router temperature / hard choices (set by the training schedule)
         self.st = False  # training: straight-through one-hot routing (only chosen ops computed)
@@ -35,7 +44,7 @@ class OpLoopLM(nn.Module):
         """Decode cache: the encoder's recurrent state and the scanned context so far. Every position's loop
         computation reads only its own registers and the context up to it, so a new byte needs one pass over
         itself against the cached context (no recompute of earlier positions)."""
-        return {"enc": None, "ctx": None}
+        return {"enc": None, "ctx": None, "x": None}
 
     def forward(
         self, x: torch.Tensor, n_loops: int | None = None, generator=None, full_trace: bool = False, cache=None
@@ -46,14 +55,17 @@ class OpLoopLM(nn.Module):
         state = cache["enc"] if cache is not None else None
         ctx_new, state = self.encoder(self.embed(x), state)
         ctx = ctx_new
+        x_all = x
         if cache is not None:
             ctx = ctx_new if cache["ctx"] is None else torch.cat([cache["ctx"], ctx_new], 1)
-            cache["enc"], cache["ctx"] = state, ctx
+            x_all = x if cache["x"] is None else torch.cat([cache["x"], x], 1)
+            cache["enc"], cache["ctx"], cache["x"] = state, ctx, x_all
+        words = word_pool(ctx, x_all) if self.loop.word_keys else None  # O(T d): recomputed over the full context
         h = ctx_new
         regs = self.loop.new_registers(x.shape[0], x.shape[1], ctx_new, ctx.shape[1])
         trace = []
         for i in range(n_loops or self.n_loops):
-            h, regs, probs = self.loop(h, ctx, regs, i, self.tau, self.hard, generator, self.st)
+            h, regs, probs = self.loop(h, ctx, regs, i, self.tau, self.hard, generator, self.st, words)
             trace.append(probs if full_trace else probs["op"])
         return self.norm(h) @ self.embed.weight.t(), trace
 

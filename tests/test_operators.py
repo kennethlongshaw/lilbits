@@ -102,3 +102,30 @@ def test_straight_through_routing_trains_and_skips_unchosen_ops():
     assert m.loop.router.weight.grad is not None and m.loop.router.weight.grad.abs().sum() > 0
     _, trace = m(x)
     assert all(((p == 0) | (p == 1)).all() for p in trace)  # one-hot in the forward pass
+
+
+def test_word_pool_means_over_words_and_marks_word_ends():
+    from lilbits.mixers.operators import word_pool
+
+    x = torch.tensor([list(b"AB, CDE X")])
+    ctx = torch.arange(9, dtype=torch.float).view(1, 9, 1).expand(1, 9, 2).contiguous()
+    wctx, wend = word_pool(ctx, x)
+    assert wend[0].tolist() == [False, True, False, False, False, False, True, False, False]
+    assert wctx[0, :, 0].tolist() == [0, 0.5, 2, 3, 4, 4.5, 5, 7, 8]
+
+
+def test_word_keys_stay_causal_and_cached_decode_matches():
+    from lilbits.models.op_loop import OpLoopLM
+
+    torch.manual_seed(0)
+    m = OpLoopLM(32, 3, word_keys=True).eval()
+    m.hard = True
+    x = torch.tensor([list(b"COUNT AB: AB, CD, AB => 2")])
+    with torch.no_grad():
+        full, _ = m(x)
+        changed = x.clone()
+        changed[0, -3:] = torch.tensor(list(b"XYZ"))
+        assert torch.allclose(m(changed)[0][:, :-3], full[:, :-3], atol=1e-5)  # later bytes never leak back
+        cache = m.new_cache()
+        parts = [m(x[:, :10], cache=cache)[0]] + [m(x[:, t : t + 1], cache=cache)[0] for t in range(10, x.shape[1])]
+    assert torch.allclose(torch.cat(parts, 1), full, atol=1e-4)
