@@ -49,6 +49,17 @@ from torch import nn
 
 ROOT = Path(__file__).resolve().parent.parent
 MiB = 2**20
+MATCH = {"bytes": ("deployed MiB", "deployed_bytes", MiB), "params": ("M params", "params", 1e6)}
+AXIS = "bytes"  # set by --match: what the size grid and every fit / crossover is measured in
+
+
+def xval(r: dict) -> float:
+    _, key, unit = MATCH[AXIS]
+    return r[key] / unit
+
+
+def xunit() -> str:
+    return MATCH[AXIS][0]
 
 
 # ---- families -----------------------------------------------------------------------------------------------
@@ -237,33 +248,36 @@ def label(fam: str, knobs: dict) -> str:
 # ---- sizing -------------------------------------------------------------------------------------------------
 
 
-def deployed_bytes(fam: Family, width: int, knobs: dict) -> int:
+def model_size(fam: Family, width: int, knobs: dict) -> tuple[int, int]:
+    """(deployed bytes, params) of the deployable model at this width."""
     from lilbits.measure import size_report
 
     torch.manual_seed(0)
     m = fam.build(width, **knobs)
     if fam.stage2:
         fam.stage2(m)
-    return size_report(m)["deployed_total_bytes"]
+    return size_report(m)["deployed_total_bytes"], sum(p.numel() for p in m.parameters())
 
 
 def solve_width(fam: Family, knobs: dict, target_mib: float, cache: dict) -> int | None:
-    """Width (multiple of width_step) whose deployed size is closest to the target. Deployed bytes are quadratic
-    in width at fixed knobs, so three small real builds fit it exactly enough; None if out of range."""
+    """Width (multiple of width_step) whose size (deployed MiB or M params, per --match) is closest to the
+    target. Both are quadratic in width at fixed knobs, so three small real builds fit them exactly enough; None
+    if out of range."""
     key = label(fam.name, knobs)
-    if key not in cache:
+    if "params" not in cache.get(key, {}):
         ws = [2 * fam.width_step, 4 * fam.width_step, 6 * fam.width_step]
-        ys = [deployed_bytes(fam, w, knobs) for w in ws]
-        cache[key] = {"w": ws, "bytes": ys}
-    ws, ys = cache[key]["w"], cache[key]["bytes"]
+        sizes = [model_size(fam, w, knobs) for w in ws]
+        cache[key] = {"w": ws, "bytes": [b for b, _ in sizes], "params": [n for _, n in sizes]}
+    ws, ys = cache[key]["w"], cache[key][AXIS]
+    target = target_mib * MATCH[AXIS][2]
 
     # quadratic through 3 points (Lagrange)
     def f(w):
         return sum(y * math.prod((w - wj) / (wi - wj) for wj in ws if wj != wi) for wi, y in zip(ws, ys, strict=True))
 
     cands = range(fam.width_step, fam.max_width + 1, fam.width_step)
-    best = min(cands, key=lambda w: abs(math.log(max(f(w), 1)) - math.log(target_mib * MiB)))
-    if abs(math.log(max(f(best), 1) / (target_mib * MiB))) > math.log(1.35):
+    best = min(cands, key=lambda w: abs(math.log(max(f(w), 1)) - math.log(target)))
+    if abs(math.log(max(f(best), 1) / target)) > math.log(1.35):
         return None  # cannot get within 35% of the target (too small for the family's fixed parts, or too big)
     return best
 
@@ -327,7 +341,7 @@ def worker(spec: dict) -> dict:
         "train_cpu_util": mt.cpu_util,
         "train_peak_rss_mib": mt.peak_extra_mib,
         "train_wall_s": mt.wall_s,
-        "train_last_loss": statistics.mean(losses[-5:]),
+        "train_last_loss": statistics.mean(losses[-5:]),  # includes a family's aux terms (pocket: MTP, ratio)
     }
     buf = io.BytesIO()
     torch.save(model.state_dict(), buf)
@@ -335,7 +349,10 @@ def worker(spec: dict) -> dict:
     model.eval()
     test = ShakespeareBytes("test", seed=1).sample(8, 256)
     with torch.no_grad():
-        out["bpb"] = (fam.eval_ce or fam.loss)(model, test).item() / math.log(2)
+        out["eval_loss"] = (fam.eval_ce or fam.loss)(model, test).item()
+    out["bpb"] = out["eval_loss"] / math.log(2)
+    span = max(1, len(losses) // 10)
+    out["loss_curve"] = [statistics.mean(losses[i : i + span]) for i in range(0, len(losses), span)]
     trim()
     rss0 = Meter()
     with rss0:
@@ -427,7 +444,7 @@ def analyze(rows: list[dict]) -> dict:
         if "error" not in r:
             curves.setdefault(r["curve"], []).append(r)
     fits: dict = {}
-    sizes = {n: [p["deployed_bytes"] / MiB for p in pts] for n, pts in curves.items()}
+    sizes = {n: [xval(p) for p in pts] for n, pts in curves.items()}
     for name, pts in curves.items():
         fits[name] = {k: power_fit(sizes[name], [p[k] for p in pts]) for k in METRICS}
         fits[name]["points"] = len(pts)
@@ -448,30 +465,32 @@ def report(rows: list[dict], an: dict, args) -> str:
     lines = [
         "# Scaling sweep",
         "",
-        f"Sizes (MiB deployed): {args.sizes}. Short runs: {args.steps} steps x {args.batch} x {args.seq} bytes of "
+        f"Matched on {xunit()}: {args.sizes}. Short runs: {args.steps} steps x {args.batch} x {args.seq} bytes of "
         "Shakespeare, cosine; single-threaded CPU, one process per point. Smoke-scale: read slopes and orderings, "
         "not absolute bits per byte.",
         "",
         "## Points",
         "",
-        "| curve | target MiB | width | params | deployed MiB | disk MiB | bpb | train step ms | train CPU util | "
+        "| curve | target | width | params | deployed MiB | disk MiB | train loss | eval loss | bpb | train step ms | "
+        "train wall s | train CPU util | "
         "train peak RSS MiB | decode ms/B | decode CPU ms/B | prefill B/s | infer peak RSS MiB |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---" * 17 + "|",
     ]
     for r in rows:
         if "error" in r:
-            lines.append(f"| {r['curve']} | {r['target_mib']} | {r.get('width')} | error: see json |" + " |" * 10)
+            lines.append(f"| {r['curve']} | {r['target_mib']} | {r.get('width')} | error: see json |" + " |" * 14)
             continue
         lines.append(
             f"| {r['curve']} | {r['target_mib']} | {r['width']} | {r['params'] / 1e6:.2f}M | "
-            f"{r['deployed_bytes'] / MiB:.2f} | {r['disk_bytes'] / MiB:.2f} | {r['bpb']:.3f} | "
-            f"{r['train_step_ms']:.0f} | {r['train_cpu_util']:.2f} | {r['train_peak_rss_mib']:.0f} | "
+            f"{r['deployed_bytes'] / MiB:.2f} | {r['disk_bytes'] / MiB:.2f} | {r['train_last_loss']:.3f} | "
+            f"{r['eval_loss']:.3f} | {r['bpb']:.3f} | {r['train_step_ms']:.0f} | {r['train_wall_s']:.1f} | "
+            f"{r['train_cpu_util']:.2f} | {r['train_peak_rss_mib']:.0f} | "
             f"{r['decode_ms_per_byte']:.2f} | {r['decode_cpu_ms_per_byte']:.2f} | {r['prefill_bytes_per_s']:.0f} | "
             f"{r['infer_peak_rss_mib']:.0f} |"
         )
     if args.skipped:
         lines += ["", "Out of range (no width within 35% of the target): " + ", ".join(args.skipped)]
-    lines += ["", "## Fits (y = a * MiB^b)", ""]
+    lines += ["", f"## Fits (y = a * size^b, size in {xunit()})", ""]
     lines += [
         "| curve | points | " + " | ".join(m[0] for m in METRICS.values()) + " |",
         "|---" * (len(METRICS) + 2) + "|",
@@ -497,7 +516,7 @@ def report(rows: list[dict], an: dict, args) -> str:
                 r = f"x{v['ratio_min']:.2f}" + (
                     f"-{v['ratio_max']:.2f}" if v["ratio_max"] / v["ratio_min"] > 1.01 else ""
                 )
-                where = f"crosses at {v['mib']:.2g} MiB, {v['verdict']}" if v["mib"] else v["verdict"]
+                where = f"crosses at {v['mib']:.2g} {xunit()}, {v['verdict']}" if v["mib"] else v["verdict"]
                 cells.append(f"{r}; {where}")
         lines.append(f"| {name} | " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"
@@ -519,12 +538,12 @@ def plot(rows: list[dict], path: Path) -> bool:
             curves.setdefault(r["curve"], []).append(r)
     for ax, k in zip(axes, keys, strict=True):
         for name, pts in curves.items():
-            pts = sorted(pts, key=lambda p: p["deployed_bytes"])
+            pts = sorted(pts, key=xval)
             style = "-" if name.endswith(("depth=2", "loops=3 bpw=0.55", "loops=4")) else "--"
-            ax.plot([p["deployed_bytes"] / MiB for p in pts], [p[k] for p in pts], style, marker="o", label=name)
+            ax.plot([xval(p) for p in pts], [p[k] for p in pts], style, marker="o", label=name)
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel("deployed MiB")
+        ax.set_xlabel(xunit())
         ax.set_title(METRICS[k][0], fontsize=9)
         ax.grid(alpha=0.3)
     axes[0].legend(fontsize=6)
@@ -537,7 +556,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--worker", help=argparse.SUPPRESS)
     ap.add_argument("--families", default=",".join(FAMILIES))
-    ap.add_argument("--sizes", default="0.5,1,2", help="deployed MiB grid")
+    ap.add_argument("--sizes", default="0.5,1,2", help="size grid: deployed MiB (--match bytes) or M params")
+    ap.add_argument("--match", default="bytes", choices=list(MATCH), help="match points on deployed bytes or params")
     ap.add_argument("--steps", type=int, default=20, help="short-run training steps per point")
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--seq", type=int, default=128)
@@ -546,6 +566,8 @@ def main(argv=None):
     ap.add_argument("--out", default="results/scaling/scaling")
     ap.add_argument("--report-only", action="store_true", help="re-fit and re-render <out>.json without running")
     args = ap.parse_args(argv)
+    global AXIS
+    AXIS = args.match
     if args.worker:
         print("RESULT " + json.dumps(worker(json.loads(args.worker))))
         return
@@ -569,7 +591,7 @@ def main(argv=None):
                 width = solve_width(fam, knobs, target, cache)
                 cache_path.write_text(json.dumps(cache, indent=1))
                 if width is None:
-                    args.skipped.append(f"{curve} @ {target} MiB")
+                    args.skipped.append(f"{curve} @ {target} {xunit()}")
                     continue
                 spec = {"family": fname, "knobs": knobs, "width": width, "steps": args.steps}
                 spec |= {"batch": args.batch, "seq": args.seq, "lr": args.lr}
@@ -578,7 +600,7 @@ def main(argv=None):
                 rows.append(r)
                 msg = str(r.get("error", "")).splitlines()[-1:]
                 print(
-                    f"{curve:28s} {target:5g} MiB  d={width:<5d} "
+                    f"{curve:28s} {target:5g} {xunit()}  d={width:<5d} "
                     + (f"bpb {r['bpb']:.3f}  decode {r['decode_ms_per_byte']:.2f} ms/B" if not msg else str(msg))
                     + f"  ({time.time() - t0:.0f}s)",
                     flush=True,
