@@ -37,7 +37,7 @@ from lilbits.models.decision import StatefulBlock
 from lilbits.models.looped_index import Cache, LoopedIndexConfig, LoopedIndexLM, MTPHead, convert_core_to_littlebit
 
 N_BYTES = 256
-SEPARATORS = b" \t\n\r.,;:!?()[]{}<>\"'`/\\|=+-*&^%$#@~_"
+SEPARATORS = b" \t\n\r"  # a patch opens at the first byte after whitespace (BLT-style space patching)
 
 
 @dataclass

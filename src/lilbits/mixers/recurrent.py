@@ -41,6 +41,8 @@ class ShortConv(nn.Module):
         self.conv = nn.Conv1d(channels, channels, kernel, groups=channels, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.kernel == 1:  # a per-channel scale: skip conv1d's per-call overhead (dominant at decode, T = 1)
+            return F.silu(x * self.conv.weight[:, 0, 0])
         y = self.conv(F.pad(x.transpose(1, 2), (self.kernel - 1, 0)))
         return F.silu(y).transpose(1, 2)
 

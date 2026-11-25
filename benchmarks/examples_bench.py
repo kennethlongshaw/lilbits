@@ -51,6 +51,8 @@ RUNS: list[tuple] = [
     ("09 looped index LM (5 stages + decode modes)", ["examples/09_looped_index_lm.py"]),
     ("09 looped index LM, LUT decode", ["examples/09_looped_index_lm.py"], ["--kernel", "lut"]),
     ("09 looped index LM, greedy bpw allocation", ["examples/09_looped_index_lm.py", "--bpw-alloc", "greedy"]),
+    ("10 pocket LM vs FP16 same size", ["examples/10_pocket_lm.py"]),
+    ("10 pocket LM, LUT decode", ["examples/10_pocket_lm.py"], ["--kernel", "lut"]),
 ]
 METER_KEYS = ("wall_s", "cpu_s", "cpu_util", "peak_extra_mib")
 

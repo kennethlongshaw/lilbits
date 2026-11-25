@@ -32,11 +32,17 @@ class LoopScaledLinear(nn.Module):
         self.h = nn.Parameter(torch.ones(n_loops, self.out_features))
         self.l = nn.Parameter(torch.ones(n_loops, base.rank)) if isinstance(base, LittleBitLinear) else None
 
+    def train(self, mode: bool = True):
+        self.__dict__["_factors"] = None  # weights may change once training resumes
+        return super().train(mode)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         i = self.loop
         base = self.base
         if self.l is None or not isinstance(base, LittleBitLinear):
             return base(x * self.g[i]) * self.h[i]
+        if not self.training and not torch.is_grad_enabled():
+            return self._forward_cached(x, i, base)
         x = x * self.g[i]
         y = None
         for p in base.paths:
@@ -45,6 +51,20 @@ class LoopScaledLinear(nn.Module):
             z = (z @ binarize(p.U, base.ste, base.smooth_k).t()) * h
             y = z if y is None else y + z
         assert y is not None
+        y = y * self.h[i]
+        return y if base.bias is None else y + base.bias * self.h[i]
+
+    @torch.no_grad()
+    def _forward_cached(self, x: torch.Tensor, i: int, base: LittleBitLinear) -> torch.Tensor:
+        """Inference: the shared +-1 factors with each path's scales folded in, built once per eval() session
+        (signs are not re-binarized per call); the loop's scales stay separate vectors."""
+        cache = self.__dict__.get("_factors")
+        if cache is None:
+            A, B = base.factors()  # (in, R), (out, R), R = rank * paths
+            cache = self.__dict__["_factors"] = (A.contiguous(), B.t().contiguous())
+        A, Bt = cache
+        assert self.l is not None
+        y = (((x * self.g[i]) @ A) * self.l[i].repeat(len(base.paths))) @ Bt
         y = y * self.h[i]
         return y if base.bias is None else y + base.bias * self.h[i]
 
