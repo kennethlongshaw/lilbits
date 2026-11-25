@@ -1,0 +1,20 @@
+import random
+
+from lilbits.op_tasks import TASKS, chain_match, make, score, score_path
+
+
+def test_every_task_scores_its_reference_and_fits():
+    rng = random.Random(0)
+    for t in TASKS:
+        for _ in range(20):
+            e = make(t, rng)
+            assert score(t, e.answer, e) == 1.0 and len(e.prompt) + len(e.answer) < 200
+
+
+def test_path_scoring_and_chain_match():
+    e = make("path", random.Random(3))
+    _, a, b, _ = e.meta
+    assert score_path(e.answer, e) == 1.0 and score_path(f"{a} {b}", e) == 0.0
+    assert chain_match("count", ["attend", "filter", "count", "noop"]) == 1.0
+    assert chain_match("count", ["count", "filter"]) == 0.0
+    assert chain_match("argmax", ["max", "point"]) == 1.0

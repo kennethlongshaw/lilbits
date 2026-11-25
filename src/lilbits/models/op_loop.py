@@ -69,5 +69,27 @@ class OpLoopLM(nn.Module):
         self.hard = hard
         return bytes(out).decode(errors="replace"), ops_first
 
+    @torch.no_grad()
+    def sample(self, prompt: bytes, group: int, max_bytes: int = 40, temperature: float = 1.0, generator=None):
+        """`group` sampled completions of prompt (hard routing), each up to a newline. Returns list of bytes."""
+        hard, self.hard = self.hard, True
+        x = torch.tensor(list(prompt))[None].expand(group, -1)
+        done = torch.zeros(group, dtype=torch.bool)
+        outs: list[list[int]] = [[] for _ in range(group)]
+        for _ in range(max_bytes):
+            logits, _ = self(x)
+            p = (logits[:, -1] / temperature).softmax(-1)
+            tok = torch.multinomial(p, 1, generator=generator).squeeze(-1)
+            tok = torch.where(done, torch.full_like(tok, 10), tok)
+            for i, t in enumerate(tok.tolist()):
+                if not done[i] and t != 10:
+                    outs[i].append(t)
+            done |= tok == 10
+            if done.all():
+                break
+            x = torch.cat([x, tok[:, None]], 1)
+        self.hard = hard
+        return [bytes(o) for o in outs]
+
 
 __all__ = ["OpLoopLM"]
