@@ -332,6 +332,7 @@ class PocketLM(nn.Module):
         drafts = self._drafts(y[:, -1:], t1, k)
         out: list[torch.Tensor] = []
         passes, proposed, accepted, rate = 0, 0, 0, 0.5
+        pos_prop, pos_acc = [0] * k_max, [0] * k_max  # per draft position: proposed / accepted
         while sum(o.shape[1] for o in out) < n_new:
             seq = torch.cat([t1, *drafts], 1)
             snap = cache.snapshot()
@@ -342,6 +343,9 @@ class PocketLM(nn.Module):
             while a < len(drafts) and drafts[a].item() == preds[0, a].item():
                 a += 1
             proposed, accepted = proposed + len(drafts), accepted + a
+            for j in range(len(drafts)):
+                pos_prop[j] += 1
+                pos_acc[j] += int(j < a)
             if a < len(drafts):
                 cache.restore(snap)
                 yv, _ = self(seq[:, : a + 1], cache)
@@ -357,6 +361,7 @@ class PocketLM(nn.Module):
             "passes": passes,
             "bytes_per_pass": n_new / passes,
             "acceptance": accepted / max(1, proposed),
+            "acceptance_by_draft": [a / p if p else None for a, p in zip(pos_acc, pos_prop, strict=True)],
             "cache": cache.state_bytes(),
         }
         return torch.cat([prompt, gen], 1), stats

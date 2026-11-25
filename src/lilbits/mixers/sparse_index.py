@@ -280,6 +280,7 @@ class IndexedRetrieval(nn.Module):
                     return None  # dense fallback for some query: use the masked path
             tb = min(self.top_blocks, nb)
             chosen = scores.topk(tb, -1).indices  # B, L, tb
+            aux["block_back"] = (cur - chosen).flatten().tolist()  # how many blocks back each pick reaches
             cand = (chosen[..., None] * blk + torch.arange(blk, device=dev)).flatten(2)  # B, L, tb*blk
             sig = index.rows("sig", cand)  # B, L, tb*blk, nbytes
             ham = _POPCOUNT.to(dev)[(pack_bits(qm).unsqueeze(2) ^ sig).long()].sum(-1, dtype=torch.int32)

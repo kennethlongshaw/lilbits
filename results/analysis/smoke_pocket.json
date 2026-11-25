@@ -1,0 +1,341 @@
+{
+ "deployed_kib_by_part": {
+  "byte encoder": 104.671875,
+  "router": 1.0,
+  "up": 64.0,
+  "body prelude": 427.9609375,
+  "body core (looped)": 2959.8359375,
+  "body coda": 427.9609375,
+  "down": 64.0,
+  "byte decoder": 104.671875,
+  "MTP heads": 158.75
+ },
+ "deployed_kib_total": 4354.9765625,
+ "bits_per_byte_by_loops": {
+  "1 loops": 7.2586708692303565,
+  "2 loops": 7.507180984212891,
+  "3 loops": 7.814583462295678
+ },
+ "fp16_same_size_bits_per_byte": 4.397762173837449,
+ "core_state_change_by_loop": [
+  1.0,
+  0.6111296862363815,
+  0.5084481537342072
+ ],
+ "retrieval_blocks_back_hist": {
+  "1": 192
+ },
+ "retrieval_dense_fallback_rate": 0.5,
+ "patches": {
+  "bytes_per_patch": 4.715596330275229,
+  "patch_length_hist": {
+   "1": 16,
+   "2": 19,
+   "3": 38,
+   "4": 32,
+   "5": 36,
+   "6": 23,
+   "7": 18,
+   "8": 36
+  },
+  "sample": "| |laugh~|me |asleep, |for |I |am |very |heavy?~|~|ANTONIO:|~|Go |sleep, |and |hear |us.~|~|ALONSO:~|What, |all |so |soon |asleep! |I |wish |mine |eyes~|Would, |with |themselv|es, |shut |up |my |t"
+ },
+ "littlebit_near_zero_latent_by_part": {
+  "body.prelude": 0.039992247708141804,
+  "body.core": 0.04010218585079366,
+  "body.coda": 0.03997803805395961
+ },
+ "littlebit_layers": 27,
+ "mtp_acceptance_by_draft": [
+  0.0,
+  0.0
+ ],
+ "profile_native": {
+  "prefill 256 B": {
+   "byte encoder": {
+    "wall_ms": 1.716118999866012,
+    "share": 0.020244031959062127,
+    "calls": 1,
+    "gflops": 0.0393216,
+    "resident_mib": 0.204437255859375
+   },
+   "router": {
+    "wall_ms": 0.15300599989132024,
+    "share": 0.0018049204932583235,
+    "calls": 1,
+    "gflops": 0.0,
+    "resident_mib": 0.001953125
+   },
+   "up": {
+    "wall_ms": 0.0752870000724215,
+    "share": 0.000888115821622516,
+    "calls": 1,
+    "gflops": 0.003735552,
+    "resident_mib": 0.125
+   },
+   "body prelude": {
+    "wall_ms": 11.143919999994978,
+    "share": 0.13145817548010585,
+    "calls": 4,
+    "gflops": 0.391187904,
+    "resident_mib": 24.581008911132812
+   },
+   "body core (looped)": {
+    "wall_ms": 50.11331600007907,
+    "share": 0.5911568899122893,
+    "calls": 12,
+    "gflops": 1.39173024,
+    "resident_mib": 21.952068328857422
+   },
+   "body coda": {
+    "wall_ms": 11.214040999902863,
+    "share": 0.13228535107996078,
+    "calls": 4,
+    "gflops": 0.391187904,
+    "resident_mib": 24.581008911132812
+   },
+   "down": {
+    "wall_ms": 0.106772999970417,
+    "share": 0.0012595373770320265,
+    "calls": 1,
+    "gflops": 0.003735552,
+    "resident_mib": 0.125
+   },
+   "byte decoder": {
+    "wall_ms": 1.9560770001589844,
+    "share": 0.023074673323176646,
+    "calls": 1,
+    "gflops": 0.0393216,
+    "resident_mib": 0.204437255859375
+   },
+   "MTP heads": {
+    "wall_ms": 0.0,
+    "share": 0.0,
+    "calls": 0,
+    "gflops": 0.0,
+    "resident_mib": 0.31005859375
+   },
+   "_total": {
+    "wall_ms": 84.77160100005676,
+    "unattributed_share": 0.09782830455349245,
+    "gflops": 2.278046144,
+    "resident_mib": 72.1672477722168
+   }
+  },
+  "prefill 64 B + decode 64 B": {
+   "byte encoder": {
+    "wall_ms": 18.072785000867952,
+    "share": 0.07661576919431773,
+    "calls": 65,
+    "gflops": 0.016908288,
+    "resident_mib": 0.204437255859375
+   },
+   "router": {
+    "wall_ms": 3.4462049993635446,
+    "share": 0.014609460955511888,
+    "calls": 65,
+    "gflops": 0.0,
+    "resident_mib": 0.001953125
+   },
+   "up": {
+    "wall_ms": 0.3456949996234471,
+    "share": 0.0014655012108818752,
+    "calls": 16,
+    "gflops": 0.001835008,
+    "resident_mib": 0.125
+   },
+   "body prelude": {
+    "wall_ms": 23.001693999731287,
+    "share": 0.09751084176993755,
+    "calls": 16,
+    "gflops": 0.187140352,
+    "resident_mib": 24.581008911132812
+   },
+   "body core (looped)": {
+    "wall_ms": 117.54453399976228,
+    "share": 0.49830531855200594,
+    "calls": 48,
+    "gflops": 0.656888576,
+    "resident_mib": 21.952068328857422
+   },
+   "body coda": {
+    "wall_ms": 23.91626899975563,
+    "share": 0.10138799004063256,
+    "calls": 16,
+    "gflops": 0.187140352,
+    "resident_mib": 24.581008911132812
+   },
+   "down": {
+    "wall_ms": 0.3587720000268746,
+    "share": 0.0015209384024721523,
+    "calls": 16,
+    "gflops": 0.001835008,
+    "resident_mib": 0.125
+   },
+   "byte decoder": {
+    "wall_ms": 20.04501000055825,
+    "share": 0.08497660209131055,
+    "calls": 65,
+    "gflops": 0.016908288,
+    "resident_mib": 0.204437255859375
+   },
+   "MTP heads": {
+    "wall_ms": 0.0,
+    "share": 0.0,
+    "calls": 0,
+    "gflops": 0.0,
+    "resident_mib": 0.31005859375
+   },
+   "_total": {
+    "wall_ms": 235.88858000016444,
+    "unattributed_share": 0.12360757778292975,
+    "gflops": 1.077306624,
+    "resident_mib": 72.1672477722168
+   }
+  }
+ },
+ "profile_lut": {
+  "prefill 256 B": {
+   "byte encoder": {
+    "wall_ms": 2.8279650000513357,
+    "share": 0.02537263126488249,
+    "calls": 1,
+    "gflops": 0.0393216,
+    "resident_mib": 0.204437255859375
+   },
+   "router": {
+    "wall_ms": 0.14454400002250622,
+    "share": 0.001296855376235435,
+    "calls": 1,
+    "gflops": 0.0,
+    "resident_mib": 0.001953125
+   },
+   "up": {
+    "wall_ms": 0.09488699993198679,
+    "share": 0.0008513305012832645,
+    "calls": 1,
+    "gflops": 0.003735552,
+    "resident_mib": 0.125
+   },
+   "body prelude": {
+    "wall_ms": 16.945179999993343,
+    "share": 0.15203292963282355,
+    "calls": 4,
+    "gflops": 0.391187904,
+    "resident_mib": 12.726749420166016
+   },
+   "body core (looped)": {
+    "wall_ms": 64.08732499994585,
+    "share": 0.5749944097422682,
+    "calls": 12,
+    "gflops": 1.39173024,
+    "resident_mib": 14.138824462890625
+   },
+   "body coda": {
+    "wall_ms": 16.108815000052346,
+    "share": 0.1445290246177434,
+    "calls": 4,
+    "gflops": 0.391187904,
+    "resident_mib": 12.726749420166016
+   },
+   "down": {
+    "wall_ms": 0.07872200012570829,
+    "share": 0.0007062973840154922,
+    "calls": 1,
+    "gflops": 0.003735552,
+    "resident_mib": 0.125
+   },
+   "byte decoder": {
+    "wall_ms": 2.0047520001753583,
+    "share": 0.01798672659564798,
+    "calls": 1,
+    "gflops": 0.0393216,
+    "resident_mib": 0.204437255859375
+   },
+   "MTP heads": {
+    "wall_ms": 0.0,
+    "share": 0.0,
+    "calls": 0,
+    "gflops": 0.0,
+    "resident_mib": 0.31005859375
+   },
+   "_total": {
+    "wall_ms": 111.45730099997309,
+    "unattributed_share": 0.08222979488510018,
+    "gflops": 2.278046144,
+    "resident_mib": 40.645484924316406
+   }
+  },
+  "prefill 64 B + decode 64 B": {
+   "byte encoder": {
+    "wall_ms": 19.22063399979379,
+    "share": 0.09187429496652916,
+    "calls": 65,
+    "gflops": 0.016908288,
+    "resident_mib": 0.204437255859375
+   },
+   "router": {
+    "wall_ms": 3.8199580008040357,
+    "share": 0.018259332555283465,
+    "calls": 65,
+    "gflops": 0.0,
+    "resident_mib": 0.001953125
+   },
+   "up": {
+    "wall_ms": 0.30721599955541024,
+    "share": 0.00146848711451941,
+    "calls": 16,
+    "gflops": 0.001835008,
+    "resident_mib": 0.125
+   },
+   "body prelude": {
+    "wall_ms": 15.476827000611593,
+    "share": 0.07397896286955921,
+    "calls": 16,
+    "gflops": 0.090941632,
+    "resident_mib": 12.817249298095703
+   },
+   "body core (looped)": {
+    "wall_ms": 104.98967700095818,
+    "share": 0.5018488231621361,
+    "calls": 48,
+    "gflops": 0.460671296,
+    "resident_mib": 14.254112243652344
+   },
+   "body coda": {
+    "wall_ms": 15.355322999539567,
+    "share": 0.07339817586564329,
+    "calls": 16,
+    "gflops": 0.090941632,
+    "resident_mib": 12.817249298095703
+   },
+   "down": {
+    "wall_ms": 0.45569800022349227,
+    "share": 0.0021782284855244513,
+    "calls": 16,
+    "gflops": 0.001835008,
+    "resident_mib": 0.125
+   },
+   "byte decoder": {
+    "wall_ms": 21.759053000778295,
+    "share": 0.10400789347569357,
+    "calls": 65,
+    "gflops": 0.016908288,
+    "resident_mib": 0.204437255859375
+   },
+   "MTP heads": {
+    "wall_ms": 0.0,
+    "share": 0.0,
+    "calls": 0,
+    "gflops": 0.0,
+    "resident_mib": 0.31005859375
+   },
+   "_total": {
+    "wall_ms": 209.20578499999465,
+    "unattributed_share": 0.1329858015051114,
+    "gflops": 0.688691904,
+    "resident_mib": 40.9417724609375
+   }
+  }
+ }
+}
