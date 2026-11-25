@@ -50,6 +50,7 @@ RUNS: list[tuple] = [
     ("08 LLM-JEPA (LM / online / EMA / EMA+dropout)", ["examples/08_llm_jepa.py"]),
     ("09 looped index LM (5 stages + decode modes)", ["examples/09_looped_index_lm.py"]),
     ("09 looped index LM, LUT decode", ["examples/09_looped_index_lm.py"], ["--kernel", "lut"]),
+    ("09 looped index LM, greedy bpw allocation", ["examples/09_looped_index_lm.py", "--bpw-alloc", "greedy"]),
 ]
 METER_KEYS = ("wall_s", "cpu_s", "cpu_util", "peak_extra_mib")
 

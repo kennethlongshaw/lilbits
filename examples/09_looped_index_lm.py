@@ -38,7 +38,13 @@ import torch.nn.functional as F
 from lilbits.data import RecallSource
 from lilbits.inference.lut import pack_lut
 from lilbits.measure import Meter
-from lilbits.models.looped_index import LoopedIndexConfig, LoopedIndexLM, convert_core_to_littlebit, memory_tiers
+from lilbits.models.looped_index import (
+    LoopedIndexConfig,
+    LoopedIndexLM,
+    allocate_core_ranks,
+    convert_core_to_littlebit,
+    memory_tiers,
+)
 from lilbits.runner import Example, fit, run
 
 STAGES = [
@@ -72,6 +78,12 @@ def add_args(ap):
     ap.add_argument("--loops", type=int, default=3)
     ap.add_argument("--gen", type=int, default=24, help="infer: tokens to decode")
     ap.add_argument(
+        "--bpw-alloc",
+        default="uniform",
+        choices=["uniform", "greedy"],
+        help="stage 2: same core bpw on every layer, or uneven ranks at the same total bits (calibrated)",
+    )
+    ap.add_argument(
         "--kernel",
         default="native",
         choices=["native", "lut"],
@@ -85,16 +97,22 @@ def build(args, meta):
     ref_cfg = copy.deepcopy(cfg)
     lean = LoopedIndexLM(cfg)
     if meta.get("core_converted"):
-        convert_core_to_littlebit(lean)
+        convert_core_to_littlebit(lean, ranks=meta.get("core_ranks"))
     ref_cfg.prelude_linear, ref_cfg.flat = "fp", -1.0  # FP everywhere; flat < 0: retrieval is always dense
     return {"lean": lean, "fp_dense_ref": LoopedIndexLM(ref_cfg)}
 
 
 def train_fn(models, args, fab):
-    out = {}
+    out: dict = {}
+    ranks = None
     for name, st in STAGES:
         if st["convert"]:
-            convert_core_to_littlebit(models["lean"])
+            if args.bpw_alloc == "greedy":
+                calib = RecallSource(length=args.length, seed=args.seed + 1).sample(args.batch)[0]
+                ranks, report = allocate_core_ranks(models["lean"], calib)
+                out["bpw_allocation"] = {k: v for k, v in report.items() if k != "layers"}
+                out["bpw_allocation"]["ranks"] = ranks
+            convert_core_to_littlebit(models["lean"], ranks=ranks)
         for tag, m in models.items():
             m.use_index = m.distill = st["index"]
             src = RecallSource(length=args.length, seed=args.seed)
@@ -108,7 +126,7 @@ def train_fn(models, args, fab):
                     lr=2e-3,
                 )
             out[f"{name} [{tag}]"] = {**info, **meter.as_dict()}
-    return {"stages": out}, {"core_converted": True}
+    return {"stages": out}, {"core_converted": True, "core_ranks": ranks}
 
 
 def held_out(args):

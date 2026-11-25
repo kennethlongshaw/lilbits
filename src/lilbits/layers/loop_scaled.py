@@ -69,19 +69,33 @@ def set_loop(module: nn.Module, i: int) -> None:
             m.__dict__["loop"] = i
 
 
+def loop_fp_weights(module: nn.Module) -> dict[str, nn.Linear]:
+    """name -> FP base linear of every LoopScaledLinear still over nn.Linear (the layers convert_loop_linears
+    would convert), for calibration hooks and rank allocation."""
+    out = {}
+    for n, m in module.named_modules():
+        if isinstance(m, LoopScaledLinear) and isinstance(m.base, nn.Linear):
+            out[n] = m.base
+    return out
+
+
 def loop_linear_factory(base_factory, n_loops: int):
     """Wrap a linear factory so every linear it builds gets per-loop scales."""
     return lambda d_in, d_out: LoopScaledLinear(base_factory(d_in, d_out), n_loops)
 
 
 @torch.no_grad()
-def convert_loop_linears(module: nn.Module, make_littlebit, itq_iters: int = 0) -> None:
+def convert_loop_linears(
+    module: nn.Module, make_littlebit, itq_iters: int = 0, ranks: dict[str, int] | None = None
+) -> None:
     """In place: each LoopScaledLinear over an FP nn.Linear gets a LittleBit base initialized from that weight
     (Dual-SVID). Per-loop g and h are kept; a per-loop l (ones) is added. `make_littlebit(d_in, d_out)` builds
-    the empty LittleBitLinear."""
-    for m in module.modules():
+    the empty LittleBitLinear; `ranks` (module name -> rank, e.g. from `bpw_alloc.allocate_ranks`) overrides
+    the rank per layer."""
+    for name, m in module.named_modules():
         if isinstance(m, LoopScaledLinear) and isinstance(m.base, nn.Linear):
-            lb = make_littlebit(m.in_features, m.out_features).to(m.g.device)
+            kw = {"rank": ranks[name]} if ranks and name in ranks else {}
+            lb = make_littlebit(m.in_features, m.out_features, **kw).to(m.g.device)
             lb.init_from_weight(m.base.weight, itq_iters)
             if m.base.bias is not None and lb.bias is not None:
                 lb.bias.copy_(m.base.bias)

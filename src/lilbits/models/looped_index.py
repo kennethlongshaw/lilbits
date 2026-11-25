@@ -36,9 +36,10 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from lilbits.layers.bpw_alloc import allocate_ranks, input_energy
 from lilbits.layers.ffn import SwiGLU
 from lilbits.layers.littlebit import LittleBitLinear
-from lilbits.layers.loop_scaled import convert_loop_linears, loop_linear_factory, set_loop
+from lilbits.layers.loop_scaled import convert_loop_linears, loop_fp_weights, loop_linear_factory, set_loop
 from lilbits.mixers.loop_memory import LoopMemory
 from lilbits.mixers.recurrent import GatedDeltaNet
 from lilbits.mixers.sparse_index import IndexedRetrieval, TokenIndex
@@ -330,11 +331,28 @@ class LoopedIndexLM(nn.Module):
 
 
 @torch.no_grad()
-def convert_core_to_littlebit(model: LoopedIndexLM, bpw: float | None = None) -> None:
-    """Stage 2: the core's shared FP linears -> LittleBit (Dual-SVID from the FP weights), keeping per-loop scales."""
+def convert_core_to_littlebit(
+    model: LoopedIndexLM, bpw: float | None = None, ranks: dict[str, int] | None = None
+) -> None:
+    """Stage 2: the core's shared FP linears -> LittleBit (Dual-SVID from the FP weights), keeping per-loop scales.
+    `ranks` (core module name -> rank, see `allocate_core_ranks`) replaces the uniform bpw per layer."""
     bpw = model.cfg.core_bpw if bpw is None else bpw
-    convert_loop_linears(model.core, partial(LittleBitLinear, bpw=bpw, residual=True, ste="clipped"))
+    convert_loop_linears(model.core, partial(LittleBitLinear, bpw=bpw, residual=True, ste="clipped"), ranks=ranks)
     model.cfg.core_linear = "littlebit"
+
+
+@torch.no_grad()
+def allocate_core_ranks(model: LoopedIndexLM, calib: torch.Tensor, bpw: float | None = None) -> tuple[dict, dict]:
+    """Uneven bpw for the core: calibrate input energy of each FP core linear on `calib` tokens (B, T), then
+    allocate LittleBit ranks at the same total bits as a uniform `bpw` (see `layers/bpw_alloc.py`)."""
+    bpw = model.cfg.core_bpw if bpw is None else bpw
+    lins = loop_fp_weights(model.core)
+    was = model.training
+    model.eval()
+    with input_energy(lins) as act_sq:
+        model.process(calib, model.new_cache(calib.shape[0]))
+    model.train(was)
+    return allocate_ranks({n: m.weight for n, m in lins.items()}, bpw, act_sq=act_sq)
 
 
 def memory_tiers(model: LoopedIndexLM, cache_stats: dict, tokens: int) -> dict:
@@ -357,6 +375,7 @@ __all__ = [
     "LoopedIndexConfig",
     "LoopedIndexLM",
     "MTPHead",
+    "allocate_core_ranks",
     "convert_core_to_littlebit",
     "memory_tiers",
 ]
