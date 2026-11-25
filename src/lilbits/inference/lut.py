@@ -214,16 +214,29 @@ class LUTLittleBitLinear(nn.Module):
             W += h[i][:, None] * ((Su * l[i]) @ Sv) * g[i][None, :]
         return W
 
+    def _float_signs(self) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Per path (S_V (in x r), S_U^T (r x out)) as +-1 floats, for prefill. Built on first use and shared by
+        every scale set (all loops), so prefill holds rank * (in + out) floats per path, not a dense weight."""
+        cache = self.__dict__.get("_signs")
+        if cache is None:
+            cache = []
+            for i in range(self.paths):
+                Su = unpack_sign_codes(self.U_codes[i], self.out_features, self.rank)
+                Sv = unpack_sign_codes(self.V_codes[i], self.rank, self.in_features)
+                cache.append((Sv.t().contiguous(), Su.t().contiguous()))
+            self.__dict__["_signs"] = cache
+        return cache
+
     def forward(self, x: torch.Tensor, scales: tuple | None = None, key=None) -> torch.Tensor:
-        """scales: optional (g, l, h) FP32 (P, n) overrides, e.g. per-loop effective scales; `key` names them
-        for the dense-prefill cache."""
+        """scales: optional (g, l, h) FP32 (P, n) overrides, e.g. per-loop effective scales. `key` is accepted
+        for callers that name scale sets; prefill shares one set of unpacked signs across them."""
         lead, dt = x.shape[:-1], x.dtype
         x2 = x.reshape(-1, self.in_features).float()
-        if x2.shape[0] > self.max_lut_tokens:  # prefill: one unpack, then a dense matmul
-            dense = self.__dict__.setdefault("_dense", {})
-            if key not in dense:
-                dense[key] = self.weight(scales)
-            y = x2 @ dense[key].t()
+        if x2.shape[0] > self.max_lut_tokens:  # prefill: low-rank matmuls over the signs, unpacked once
+            g, l, h = scales if scales is not None else (self.g.float(), self.l.float(), self.h.float())
+            y = torch.zeros(x2.shape[0], self.out_features)
+            for i, (SvT, SuT) in enumerate(self._float_signs()):
+                y += (((x2 * g[i]) @ SvT) * l[i]) @ SuT * h[i]
         elif (lib := _load()) is not None and x2.device.type == "cpu":
             g, l, h, bias = _f32(self, "g", "l", "h", "bias")
             if scales is not None:

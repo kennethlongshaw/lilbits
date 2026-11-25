@@ -54,6 +54,16 @@ RUNS: list[tuple] = [
     ("10 pocket LM vs FP16 same size", ["examples/10_pocket_lm.py"]),
     ("10 pocket LM, LUT decode", ["examples/10_pocket_lm.py"], ["--kernel", "lut"]),
     ("11 energy-based thinking vs plain LM", ["examples/11_energy_thinking.py"]),
+    ("12 Shakespeare task: needle", ["examples/12_shakespeare_tasks.py", "--task", "needle"]),
+    ("12 Shakespeare task: copy", ["examples/12_shakespeare_tasks.py", "--task", "copy"]),
+    ("12 Shakespeare task: sort", ["examples/12_shakespeare_tasks.py", "--task", "sort"]),
+    ("12 Shakespeare task: tools", ["examples/12_shakespeare_tasks.py", "--task", "tools"]),
+    ("12 Shakespeare task: dpo", ["examples/12_shakespeare_tasks.py", "--task", "dpo"]),
+    ("12 Shakespeare task: grpo", ["examples/12_shakespeare_tasks.py", "--task", "grpo"]),
+    (
+        "12 Shakespeare task: needle, looped index LM",
+        ["examples/12_shakespeare_tasks.py", "--task", "needle", "--model", "looped"],
+    ),
 ]
 METER_KEYS = ("wall_s", "cpu_s", "cpu_util", "peak_extra_mib")
 

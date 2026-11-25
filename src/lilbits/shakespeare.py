@@ -131,20 +131,109 @@ def prompt_bytes(q: str) -> bytes:
     return f"Q: {q}\nA: ".encode()
 
 
+def segment_tensors(rows: list[list[tuple[bytes, bool]]], seq: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Each row is a list of (bytes, trained) segments. Returns bytes (B, seq + 1), right-padded with NUL, and a
+    mask (B, seq) over targets x[:, 1:] that is 1 on bytes of trained segments. Rows longer than seq + 1 are cut
+    from the left (the end, where the trained part is, is kept)."""
+    xs, ms = [], []
+    for segs in rows:
+        b = b"".join(t for t, _ in segs)
+        flag = [f for t, f in segs for _ in t]
+        b, flag = b[-(seq + 1) :], flag[-(seq + 1) :]
+        pad = seq + 1 - len(b)
+        xs.append(list(b) + [0] * pad)
+        ms.append([int(f) for f in flag[1:]] + [0] * pad)
+    return torch.tensor(xs), torch.tensor(ms, dtype=torch.float)
+
+
 def qa_tensors(pairs: list[dict], seq: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """Rows of "Q: q\\nA: a\\n" bytes, right-padded with NUL bytes to seq + 1, and a mask (B, seq) that is 1 where
+    """Rows of "Q: q\nA: a\n" bytes, right-padded with NUL bytes to seq + 1, and a mask (B, seq) that is 1 where
     the target byte (x[:, 1:]) belongs to the answer (including its closing newline). Long questions are cut
     from the left so the answer always fits."""
-    rows, masks = [], []
-    for p in pairs:
-        pr, ans = prompt_bytes(p["q"]), (p["a"] + "\n").encode()
-        pr = pr[-(seq + 1 - len(ans)) :]
-        b = pr + ans
-        m = [0] * (len(pr) - 1) + [1] * len(ans)
-        pad = seq + 1 - len(b)
-        rows.append(list(b) + [0] * pad)
-        masks.append(m + [0] * pad)
-    return torch.tensor(rows), torch.tensor(masks, dtype=torch.float)
+    return segment_tensors([[(prompt_bytes(p["q"]), False), ((p["a"] + "\n").encode(), True)] for p in pairs], seq)
+
+
+# ---- toy tasks (each exactly scored) ---------------------------------------------------------------------
+
+
+@cache
+def characters(split: str = "train", min_speeches: int = 20) -> tuple[str, ...]:
+    c = Counter(s.speaker for s in split_speeches(split))
+    return tuple(sorted(k for k, v in c.items() if v >= min_speeches and k.isalpha() and k.isupper()))
+
+
+def needle_example(length: int, rng: random.Random, split: str = "test") -> tuple[bytes, str]:
+    """Needle in a haystack: `length` bytes of Shakespeare with "The password is NAME." hidden at a random point,
+    then the question. Returns (prompt bytes ending in "A: ", answer)."""
+    text = text_of(split).encode()
+    name = rng.choice(characters())
+    needle = f" The password is {name}. ".encode()
+    q = b"\nQ: What is the password?\nA: "
+    hay = length - len(needle) - len(q)
+    start = rng.randrange(len(text) - hay)
+    window = text[start : start + hay]
+    at = rng.randrange(hay)
+    return window[:at] + needle + window[at:] + q, name
+
+
+def copy_sort_example(rng: random.Random, k: int, task: str) -> tuple[bytes, str]:
+    """copy: repeat a list of k character names; sort: the same list in alphabetical order."""
+    names = rng.sample(characters(), k)
+    target = names if task == "copy" else sorted(names)
+    return f"{task.upper()}: {', '.join(names)}\n=> ".encode(), ", ".join(target)
+
+
+TOOLS = {"search": "speaker of the speech containing the text", "next": "line after the given line"}
+
+
+def run_tool(call: str) -> str:
+    """Execute 'search("text")' or 'next("text")' over the whole corpus; unknown calls -> 'ERROR'."""
+    import re
+
+    m = re.fullmatch(r'(search|next)\("(.*)"\)', call.strip())
+    if not m:
+        return "ERROR"
+    name, arg = m.groups()
+    for s in speeches():
+        for i, line in enumerate(s.lines):
+            if arg and arg in line:
+                if name == "search":
+                    return s.speaker
+                return s.lines[i + 1] if i + 1 < len(s.lines) else "NONE"
+    return "NONE"
+
+
+def tool_example(pair: dict) -> list[tuple[bytes, bool]] | None:
+    """A QA pair as a tool-use trajectory: the model writes the call and the answer, the environment the result."""
+    import re
+
+    quoted = re.search(r'"(.*)"', pair["q"])
+    if pair["kind"] not in ("speaker", "next_line") or not quoted:
+        return None
+    call = f'{"search" if pair["kind"] == "speaker" else "next"}("{quoted.group(1)}")'
+    return [
+        (prompt_bytes(pair["q"]).removesuffix(b"A: ") + b"CALL: ", False),
+        (f"{call}\n".encode(), True),
+        (f"RESULT: {run_tool(call)}\n".encode(), False),
+        (b"A: ", False),
+        (f"{pair['a']}\n".encode(), True),
+    ]
+
+
+def preference_pairs(split: str, n: int, seed: int = 0) -> list[dict]:
+    """DPO pairs from QA: chosen = the right answer, rejected = the answer to another question of the same kind."""
+    qa = load_qa(split)
+    rng = random.Random(seed)
+    by_kind: dict[str, list[dict]] = {}
+    for p in qa:
+        by_kind.setdefault(p["kind"], []).append(p)
+    out = []
+    for p in qa[:n]:
+        other = rng.choice(by_kind[p["kind"]])
+        while other["a"] == p["a"]:
+            other = rng.choice(by_kind[p["kind"]])
+        out.append({**p, "rejected": other["a"]})
+    return out
 
 
 def exact_match(answer_fn: Callable[[str], str], pairs: list[dict]) -> dict:
