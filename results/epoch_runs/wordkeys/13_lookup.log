@@ -1,0 +1,34 @@
+
+== train ==
+  init                             loaded /tmp/i13_epoch.pt: pretrain and warm-up skipped
+  ops: SFT                         {steps: 2500, last_loss: 1.464, ce: 1.454, tau: 0.3, load_balance: 1.004, loss_curve: [1.568131905555725, 2.0491118874549867, 1.5289849467277528, 1.4940959930419921, 1.5017236423492433, 1.4826561717987061, 1.486745048046112, 1.4767673420906067, 1.4741135563850403, 1.4729427118301393], wall_s: 2918, cpu_s: 1.119e+04, cpu_util: 3.836, peak_extra_mib: 1085}
+  attend: SFT                      {steps: 2500, last_loss: 1.452, ce: 1.452, tau: 0.3, loss_curve: [1.5724023065567017, 1.5307609543800353, 1.5091225514411926, 1.4736983866691589, 1.7354595155715942, 1.5798654599189759, 1.4746564083099365, 1.4845702114105224, 1.4702191829681397, 1.4659767971038817], wall_s: 270.5, cpu_s: 1073, cpu_util: 3.966, peak_extra_mib: 219.5}
+  wall_s                           3189
+  cpu_s                            1.227e+04
+  cpu_util                         3.847
+  peak_extra_mib                   1093
+
+== test ==
+  task                             lookup
+  why                              control: attention alone suffices
+  ops                              {score_by_loops: {1 loops: 0, 2 loops: 0, 3 loops: 0, 4 loops: 0}, expected_chain_rate: 0, op_usage_by_loop: {loop 0: {topk: 50}, loop 1: {topk: 50}, loop 2: {topk: 50}, loop 3: {topk: 50}}}
+  attend                           {score_by_loops: {1 loops: 0, 2 loops: 0, 3 loops: 0, 4 loops: 0}}
+  sample_trace                     topk -> topk -> topk -> topk
+  wall_s                           5.243
+  cpu_s                            20.83
+  cpu_util                         3.973
+  peak_extra_mib                   17.64
+
+== infer ==
+  ops                              {ms: 22.07, answer: 76, reference: 14, trace: topk -> topk -> topk -> topk}
+  attend                           {ms: 20.33, answer: 66, reference: 14, trace: attend -> attend -> attend -> attend}
+  wall_s                           0.369
+  cpu_s                            0.497
+  cpu_util                         1.347
+  peak_extra_mib                   4.91
+
+== size ==
+  ops                              {params: 360840, weight_ram_bytes: 1443360, deployed_bytes: 7.217e+05}
+  attend                           {params: 359967, weight_ram_bytes: 1439868, deployed_bytes: 7.199e+05}
+  checkpoint_file_bytes            2914383
+METRICS {"example": "13_operator_loop", "mode": "all", "train": {"init": "loaded /tmp/i13_epoch.pt: pretrain and warm-up skipped", "ops: SFT": {"steps": 2500, "last_loss": 1.4636303186416626, "ce": 1.4535903930664062, "tau": 0.3, "load_balance": 1.0039979219436646, "loss_curve": [1.568131905555725, 2.0491118874549867, 1.5289849467277528, 1.4940959930419921, 1.5017236423492433, 1.4826561717987061, 1.486745048046112, 1.4767673420906067, 1.4741135563850403, 1.4729427118301393], "wall_s": 2917.8274764670005, "cpu_s": 11193.94700088, "cpu_util": 3.836397830633219, "peak_extra_mib": 1084.71484375}, "attend: SFT": {"steps": 2500, "last_loss": 1.4519429206848145, "ce": 1.4519429206848145, "tau": 0.3, "loss_curve": [1.5724023065567017, 1.5307609543800353, 1.5091225514411926, 1.4736983866691589, 1.7354595155715942, 1.5798654599189759, 1.4746564083099365, 1.4845702114105224, 1.4702191829681397, 1.4659767971038817], "wall_s": 270.53009023699997, "cpu_s": 1073.0229541879999, "cpu_util": 3.9663719227978294, "peak_extra_mib": 219.5}, "wall_s": 3188.742386578, "cpu_s": 12267.386666091, "cpu_util": 3.8470924204246395, "peak_extra_mib": 1093.11328125}, "test": {"task": "lookup", "why": "control: attention alone suffices", "ops": {"score_by_loops": {"1 loops": 0.0, "2 loops": 0.0, "3 loops": 0.0, "4 loops": 0.0}, "expected_chain_rate": 0.0, "op_usage_by_loop": {"loop 0": {"topk": 50}, "loop 1": {"topk": 50}, "loop 2": {"topk": 50}, "loop 3": {"topk": 50}}}, "attend": {"score_by_loops": {"1 loops": 0.0, "2 loops": 0.0, "3 loops": 0.0, "4 loops": 0.0}}, "sample_trace": "topk -> topk -> topk -> topk", "wall_s": 5.24299819099906, "cpu_s": 20.82979426899874, "cpu_util": 3.9728784009039675, "peak_extra_mib": 17.64453125}, "infer": {"ops": {"ms": 22.069234000809956, "answer": "76", "reference": "14", "trace": "topk -> topk -> topk -> topk"}, "attend": {"ms": 20.332698000856908, "answer": "66", "reference": "14", "trace": "attend -> attend -> attend -> attend"}, "wall_s": 0.3689643210000213, "cpu_s": 0.49700905200006673, "cpu_util": 1.347038246551861, "peak_extra_mib": 4.91015625}, "size": {"ops": {"params": 360840, "weight_ram_bytes": 1443360, "deployed_bytes": 721680.0}, "attend": {"params": 359967, "weight_ram_bytes": 1439868, "deployed_bytes": 719934.0}, "checkpoint_file_bytes": 2914383}}
