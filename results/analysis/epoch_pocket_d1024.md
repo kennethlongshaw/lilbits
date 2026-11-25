@@ -1,0 +1,62 @@
+# epoch_pocket_d1024
+
+- deployed_kib_by_part: byte encoder: 105.7, router: 1, up: 128, body prelude: 1704, body core (looped): 1.063e+04, body coda: 1704, down: 128, byte decoder: 105.7, MTP heads: 158.8
+- deployed_kib_total: 1.471e+04
+- bits_per_byte_by_loops: 1 loops: 3.335, 2 loops: 3.23, 3 loops: 3.178
+- fp16_same_size_bits_per_byte: 2.708
+- core_state_change_by_loop: 1, 0.892, 0.825
+- retrieval_blocks_back_hist: 1: 192
+- retrieval_dense_fallback_rate: 0.5
+- **patches**
+  - bytes_per_patch: 4.716
+  - patch_length_hist: 1: 16, 2: 19, 3: 38, 4: 32, 5: 36, 6: 23, 7: 18, 8: 36
+  - sample: | |laugh~|me |asleep, |for |I |am |very |heavy?~|~|ANTONIO:|~|Go |sleep, |and |hear |us.~|~|ALONSO:~|What, |all |so |soon |asleep! |I |wish |mine |eyes~|Would, |with |themselv|es, |shut |up |my |t
+- littlebit_near_zero_latent_by_part: body.prelude: 0.04048, body.core: 0.04489, body.coda: 0.04015
+- littlebit_layers: 27
+- mtp_acceptance_by_draft: 1, 1
+- **profile_native**
+  - **prefill 256 B**
+    - byte encoder: wall_ms: 1.787, share: 0.01288, calls: 1, gflops: 0.0388, resident_mib: 0.2064
+    - router: wall_ms: 0.07703, share: 0.0005551, calls: 1, gflops: 0, resident_mib: 0.001953
+    - up: wall_ms: 0.06659, share: 0.0004799, calls: 1, gflops: 0.007471, resident_mib: 0.25
+    - body prelude: wall_ms: 25.58, share: 0.1844, calls: 4, gflops: 1.56, resident_mib: 101.2
+    - body core (looped): wall_ms: 77.41, share: 0.5579, calls: 12, gflops: 5.594, resident_mib: 89.6
+    - body coda: wall_ms: 23.98, share: 0.1728, calls: 4, gflops: 1.56, resident_mib: 101.2
+    - down: wall_ms: 0.07548, share: 0.000544, calls: 1, gflops: 0.007471, resident_mib: 0.25
+    - byte decoder: wall_ms: 1.927, share: 0.01389, calls: 1, gflops: 0.0388, resident_mib: 0.2064
+    - MTP heads: wall_ms: 0, share: 0, calls: 0, gflops: 0, resident_mib: 0.3101
+    - _total: wall_ms: 138.8, unattributed_share: 0.05658, gflops: 8.841, resident_mib: 293.3
+  - **prefill 64 B + decode 64 B**
+    - byte encoder: wall_ms: 17.03, share: 0.05103, calls: 65, gflops: 0.01671, resident_mib: 0.2064
+    - router: wall_ms: 2.853, share: 0.008552, calls: 65, gflops: 0, resident_mib: 0.001953
+    - up: wall_ms: 0.4209, share: 0.001262, calls: 16, gflops: 0.00367, resident_mib: 0.25
+    - body prelude: wall_ms: 52.32, share: 0.1568, calls: 16, gflops: 0.7565, resident_mib: 101.2
+    - body core (looped): wall_ms: 164.6, share: 0.4935, calls: 48, gflops: 2.673, resident_mib: 89.6
+    - body coda: wall_ms: 51.12, share: 0.1532, calls: 16, gflops: 0.7565, resident_mib: 101.2
+    - down: wall_ms: 0.4179, share: 0.001253, calls: 16, gflops: 0.00367, resident_mib: 0.25
+    - byte decoder: wall_ms: 18.55, share: 0.05559, calls: 65, gflops: 0.01671, resident_mib: 0.2064
+    - MTP heads: wall_ms: 0, share: 0, calls: 0, gflops: 0, resident_mib: 0.3101
+    - _total: wall_ms: 333.6, unattributed_share: 0.07878, gflops: 4.243, resident_mib: 293.3
+- **profile_lut**
+  - **prefill 256 B**
+    - byte encoder: wall_ms: 2.093, share: 0.01354, calls: 1, gflops: 0.0388, resident_mib: 0.2064
+    - router: wall_ms: 0.08951, share: 0.0005792, calls: 1, gflops: 0, resident_mib: 0.001953
+    - up: wall_ms: 0.07453, share: 0.0004822, calls: 1, gflops: 0.007471, resident_mib: 0.25
+    - body prelude: wall_ms: 31.22, share: 0.202, calls: 4, gflops: 1.56, resident_mib: 52.31
+    - body core (looped): wall_ms: 83.57, share: 0.5407, calls: 12, gflops: 5.594, resident_mib: 55.79
+    - body coda: wall_ms: 27.8, share: 0.1798, calls: 4, gflops: 1.56, resident_mib: 52.31
+    - down: wall_ms: 0.08102, share: 0.0005242, calls: 1, gflops: 0.007471, resident_mib: 0.25
+    - byte decoder: wall_ms: 2.186, share: 0.01414, calls: 1, gflops: 0.0388, resident_mib: 0.2064
+    - MTP heads: wall_ms: 0, share: 0, calls: 0, gflops: 0, resident_mib: 0.3101
+    - _total: wall_ms: 154.6, unattributed_share: 0.04813, gflops: 8.841, resident_mib: 161.7
+  - **prefill 64 B + decode 64 B**
+    - byte encoder: wall_ms: 16.63, share: 0.08029, calls: 65, gflops: 0.01671, resident_mib: 0.2064
+    - router: wall_ms: 3.014, share: 0.01455, calls: 65, gflops: 0, resident_mib: 0.001953
+    - up: wall_ms: 0.3119, share: 0.001506, calls: 16, gflops: 0.00367, resident_mib: 0.25
+    - body prelude: wall_ms: 19.69, share: 0.09504, calls: 16, gflops: 0.3596, resident_mib: 52.49
+    - body core (looped): wall_ms: 107.1, share: 0.5169, calls: 48, gflops: 1.836, resident_mib: 56.03
+    - body coda: wall_ms: 19.49, share: 0.09409, calls: 16, gflops: 0.3596, resident_mib: 52.49
+    - down: wall_ms: 0.3525, share: 0.001702, calls: 16, gflops: 0.00367, resident_mib: 0.25
+    - byte decoder: wall_ms: 17.76, share: 0.08574, calls: 65, gflops: 0.01671, resident_mib: 0.2064
+    - MTP heads: wall_ms: 0, share: 0, calls: 0, gflops: 0, resident_mib: 0.3101
+    - _total: wall_ms: 207.1, unattributed_share: 0.1102, gflops: 2.612, resident_mib: 162.3

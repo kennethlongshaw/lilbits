@@ -1,0 +1,18 @@
+
+== infer ==
+  kernel                           lut
+  lut_same_as_native               True
+  decode                           {pocket greedy: {bytes_per_s: 190.6, wall_ms: 335.8, cpu_ms: 685.6, peak_rss_growth_mib: 7.707, body_passes: 16, bytes_per_body_pass: 3.938}, pocket greedy, halting eps 0.1: {bytes_per_s: 141.1, wall_ms: 453.5, cpu_ms: 933.5, peak_rss_growth_mib: 7.605, mean_loops: 3, same_as_greedy: True}, pocket MTP + verify: {bytes_per_s: 159.9, wall_ms: 400.4, cpu_ms: 814.3, peak_rss_growth_mib: 10.18, acceptance: 1, bytes_per_pass: 2.909, same_as_greedy: True}, pocket, streaming real text: {bytes_per_s: 142.5, wall_ms: 449.1, cpu_ms: 927.5, peak_rss_growth_mib: 7.438, bytes_per_body_pass: 4.267}, fp16_same_size, streaming real text: {bytes_per_s: 350.4, wall_ms: 182.6, cpu_ms: 370, peak_rss_growth_mib: 7.027}, fp16_same_size greedy: {bytes_per_s: 351.2, wall_ms: 182.3, cpu_ms: 368.6, peak_rss_growth_mib: 7.027}}
+  pocket_decode_split_ms           {byte_layers: 47.18, router: 6.668, body: 240.8}
+  state_bytes                      {pocket: 2633220, fp16_same_size: 262144}
+  deployed_bytes                   {pocket: 1.656e+07, fp16_same_size: 1.391e+07}
+  baseline_width                   512
+  wall_s                           6.14
+  cpu_s                            11.37
+  cpu_util                         1.851
+  peak_extra_mib                   187.8
+
+== size ==
+  pocket                           {params: 5129376, weight_ram_bytes: 25818232, deployed_bytes: 1.656e+07}
+  fp16_same_size                   {params: 6952608, weight_ram_bytes: 27810432, deployed_bytes: 1.391e+07}
+  checkpoint_file_bytes            192491471

@@ -9,7 +9,7 @@ Each piece can be turned off, so a benchmark can say what each one costs or save
     --scale-bits 8|16         LittleBit h, g, l storage
     --no-index                body without the sparse patch index (GDN state + loop memory only)
     --mtp N                   byte draft heads (0: plain decode only)
-    --kernel native|lut       infer: LittleBit prelude and looped core on the LUT kernels
+    --kernel lut|native       infer: LittleBit prelude, core and coda on the LUT kernels (default) or the native path
 
 The comparison model, `fp16_same_size`, is a byte-level GDN LM in FP16 whose deployed bytes match the pocket model's
 (width searched at build time), trained on the same bytes for the same number of steps.
@@ -72,7 +72,7 @@ def add_args(ap):
     ap.add_argument("--schedule", default="constant", choices=["constant", "cosine"])
     ap.add_argument("--prompt", type=int, default=128, help="infer: prompt bytes")
     ap.add_argument("--gen", type=int, default=64, help="infer: bytes to decode")
-    ap.add_argument("--kernel", default="native", choices=["native", "lut"])
+    ap.add_argument("--kernel", default="lut", choices=["native", "lut"])
 
 
 def pocket_cfg(args) -> PocketConfig:
@@ -263,9 +263,10 @@ def infer_fn(models, args):
     def stream_pocket():
         c = pocket.new_cache(1)
         pocket(prompt, c)
+        p0 = c.patches  # count only the patches of the streamed text, not the prompt's
         for t in range(real.shape[1]):
             pocket(real[:, t : t + 1], c)
-        return c
+        return c.patches - p0
 
     def stream_base():
         _, s = base(prompt)
@@ -273,8 +274,8 @@ def infer_fn(models, args):
             _, s = base(real[:, t : t + 1], s)
         return s
 
-    c = timed("pocket, streaming real text", stream_pocket, real.shape[1])
-    rows["pocket, streaming real text"]["bytes_per_body_pass"] = real.shape[1] / max(1, c.patches - 1)
+    n_patches = timed("pocket, streaming real text", stream_pocket, real.shape[1])
+    rows["pocket, streaming real text"]["bytes_per_body_pass"] = real.shape[1] / max(1, n_patches)
     timed("fp16_same_size, streaming real text", stream_base, real.shape[1])
     (_, states) = timed("fp16_same_size greedy", lambda: base.generate(prompt, args.gen), args.gen)
     return {
