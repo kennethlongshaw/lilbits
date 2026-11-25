@@ -10,6 +10,9 @@ Each piece can be turned off, so a benchmark can say what each one costs or save
     --no-index                body without the sparse patch index (GDN state + loop memory only)
     --mtp N                   byte draft heads (0: plain decode only)
     --kernel lut|native       infer: LittleBit prelude, core and coda on the LUT kernels (default) or the native path
+    --convert-at F            LittleBit core: train the FP core for this fraction of the LM steps, then convert (0.1)
+    --loop-loss W             deep supervision: also score the state after a random earlier loop (weight W, 0.3)
+    --grad-ckpt               recompute each loop in backward (less train RAM, more train time)
 
 The comparison model, `fp16_same_size`, is a byte-level GDN LM in FP16 whose deployed bytes match the pocket model's
 (width searched at build time), trained on the same bytes for the same number of steps.
@@ -29,6 +32,7 @@ split between the byte layers and the body, and whether speculative decode repro
 from __future__ import annotations
 
 import copy
+import io
 import math
 import os
 
@@ -73,6 +77,16 @@ def add_args(ap):
     ap.add_argument("--prompt", type=int, default=128, help="infer: prompt bytes")
     ap.add_argument("--gen", type=int, default=64, help="infer: bytes to decode")
     ap.add_argument("--kernel", default="lut", choices=["native", "lut"])
+    ap.add_argument(
+        "--convert-at",
+        type=float,
+        default=0.1,
+        help="LittleBit core: fraction of the LM steps trained with the FP core before conversion (rest on LittleBit)",
+    )
+    ap.add_argument("--loop-loss", type=float, default=0.3, help="deep supervision weight on a random earlier loop")
+    ap.add_argument(
+        "--grad-ckpt", action="store_true", help="recompute each loop in backward: less train RAM, more train time"
+    )
 
 
 def pocket_cfg(args) -> PocketConfig:
@@ -128,8 +142,14 @@ def train_fn(models, args, fab):
         args.steps = max(1, round(args.epochs * len(src.data) / (args.batch * args.seq) / n_stages))
         args.qa_steps = max(1, round(args.epochs * len(qa) / args.batch))
     out["schedule"] = {"steps_per_stage": args.steps, "qa_steps": args.qa_steps, "lr": args.schedule}
-    stages = [("1 FP core", False)] + ([("2 LittleBit core", True)] if args.core == "littlebit" else [])
-    for name, convert in stages:
+    total = args.steps * n_stages  # LM steps for the pocket model (and the baseline)
+    fp_steps = max(1, round(args.convert_at * total)) if n_stages == 2 else total
+    stages = [("1 FP core", False, fp_steps)]
+    if args.core == "littlebit":
+        stages.append(("2 LittleBit core", True, max(1, total - fp_steps)))
+    out["schedule"]["lm_steps"] = {name: n for name, _, n in stages}
+    pocket.body.grad_ckpt = args.grad_ckpt
+    for name, convert, n_steps in stages:
         if convert:
             convert_pocket_core(pocket)
         with Meter() as m:
@@ -137,12 +157,12 @@ def train_fn(models, args, fab):
                 fab,
                 pocket,
                 lambda _: src.sample(args.batch, args.seq),
-                lambda mod, x: pocket.training_loss(x),
-                args.steps,
+                lambda mod, x: pocket.training_loss(x, loop_loss=args.loop_loss),
+                n_steps,
                 lr=2e-3,
                 schedule=args.schedule,
             )
-        out[f"pocket: {name}"] = {**info, **m.as_dict(), "step_ms": m.wall_s / max(1, args.steps) * 1e3}
+        out[f"pocket: {name}"] = {**info, **m.as_dict(), "step_ms": m.wall_s / max(1, n_steps) * 1e3}
 
     def qa_batch(i):
         return qa_tensors([qa[(i * args.batch + j) % len(qa)] for j in range(args.batch)], args.seq)
@@ -152,13 +172,13 @@ def train_fn(models, args, fab):
             fab,
             pocket,
             qa_batch,
-            lambda mod, b: pocket.training_loss(b[0], mask=b[1]),
+            lambda mod, b: pocket.training_loss(b[0], mask=b[1], loop_loss=args.loop_loss),
             args.qa_steps,
             lr=1e-3,
             schedule=args.schedule,
         )
     out["pocket: 3 QA instruct"] = {**info, **m.as_dict()}
-    steps = args.steps * len(stages)
+    steps = total
     base = models["fp16_same_size"]
     with Meter() as m:
         info = fit(
@@ -216,6 +236,15 @@ def test_fn(models, args):
         },
         "note": "smoke-trained: bits per byte and exact match do not rank the models",
     }
+
+
+def export_bytes(m: nn.Module) -> int:
+    """Size of the deployable checkpoint file: the model as it runs here (LittleBit layers packed to sign bits by
+    the LUT kernel), float tensors stored as FP16. Training checkpoints keep FP32 latents and are much larger."""
+    buf = io.BytesIO()
+    sd = {k: v.half() if v.is_floating_point() else v for k, v in m.state_dict().items()}
+    torch.save(sd, buf)
+    return buf.tell()
 
 
 def infer_fn(models, args):
@@ -285,6 +314,7 @@ def infer_fn(models, args):
         "pocket_decode_split_ms": split,
         "state_bytes": {"pocket": sum(st["cache"].values()), "fp16_same_size": state_bytes(states)},
         "deployed_bytes": {"pocket": deployed(pocket), "fp16_same_size": deployed(base)},
+        "export_file_bytes": {"pocket": export_bytes(pocket), "fp16_same_size": export_bytes(base)},
         "baseline_width": base.embed.weight.shape[1],
     }
 

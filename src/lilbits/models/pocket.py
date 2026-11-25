@@ -38,7 +38,14 @@ from torch import nn
 from lilbits.measure import size_report
 from lilbits.models.byte_latent import DynamicChunker
 from lilbits.models.decision import StatefulBlock
-from lilbits.models.looped_index import Cache, LoopedIndexConfig, LoopedIndexLM, MTPHead, convert_core_to_littlebit
+from lilbits.models.looped_index import (
+    Cache,
+    LoopedIndexConfig,
+    LoopedIndexLM,
+    MTPHead,
+    convert_core_to_littlebit,
+    pick_exit_loop,
+)
 from lilbits.models.stateful_lm import StatefulLM
 
 N_BYTES = 256
@@ -237,42 +244,67 @@ class PocketLM(nn.Module):
             else:
                 z, pc = h.new_zeros(B, 0, h.shape[-1]), p.new_zeros(B, 0)
         with self._timed("byte_layers"):
-            prev = cache.zbar if cache.zbar is not None else h.new_zeros(B, h.shape[-1])
-            smoothed = [prev]
-            for c in range(n):  # H-Net smoothing: z_bar_c = P_c z_c + (1 - P_c) z_bar_{c-1}
-                prev = pc[:, c, None] * z[:, c] + (1 - pc[:, c, None]) * prev
-                smoothed.append(prev)
-            zs = torch.stack(smoothed, 1)
-            if n > 0:
-                cache.zbar = zs.gather(1, cnt.view(B, 1, 1).expand(B, 1, zs.shape[-1]))[:, 0]
-            zb = zs.gather(1, cid[..., None].expand(B, L, zs.shape[-1]))
-            conf = torch.where(b, p, 1 - p)
-            conf = conf + (1 - conf).detach()  # straight-through: forward 1, gradient of the confidence
-            y = zb * conf[..., None] + self.residual(h)
-            dec = []
-            for blk, s in zip(self.decoder, cache.dec, strict=True):
-                y, s = blk(y, s)
-                dec.append(s)
-            cache.dec = dec
-            y = self.norm(y)
+            y, cache.zbar, cache.dec = self._unpatch(h, z, pc, p, b, cid, cnt, cache.zbar, cache.dec)
+        aux = {"p": p, "b": b, "n": n}
+        if stats.get("exit_h"):  # deep supervision: the early-exit body output through the same byte decoder
+            ze = self.down(torch.cat(stats.pop("exit_h"), 1))
+            aux["y_exit"] = self._unpatch(h, ze, pc, p, b, cid, cnt, None, [None] * len(self.decoder))[0]
         cache.pos += L
         cache.patches += n
-        return y, {"p": p, "b": b, "n": n}
+        return y, aux
+
+    def _unpatch(self, h, z, pc, p, b, cid, cnt, zbar, dec_states):
+        """Patch outputs z (B, n, d) -> byte hidden states (B, L, d): H-Net smoothing, upsample, byte decoder.
+        Returns (y, new zbar, new decoder states)."""
+        B, L = b.shape
+        n = z.shape[1]
+        prev = zbar if zbar is not None else h.new_zeros(B, h.shape[-1])
+        smoothed = [prev]
+        for c in range(n):  # H-Net smoothing: z_bar_c = P_c z_c + (1 - P_c) z_bar_{c-1}
+            prev = pc[:, c, None] * z[:, c] + (1 - pc[:, c, None]) * prev
+            smoothed.append(prev)
+        zs = torch.stack(smoothed, 1)
+        if n > 0:
+            zbar = zs.gather(1, cnt.view(B, 1, 1).expand(B, 1, zs.shape[-1]))[:, 0]
+        zb = zs.gather(1, cid[..., None].expand(B, L, zs.shape[-1]))
+        conf = torch.where(b, p, 1 - p)
+        conf = conf + (1 - conf).detach()  # straight-through: forward 1, gradient of the confidence
+        y = zb * conf[..., None] + self.residual(h)
+        dec = []
+        for blk, s in zip(self.decoder, dec_states, strict=True):
+            y, s = blk(y, s)
+            dec.append(s)
+        return self.norm(y), zbar, dec
 
     # ---- training -------------------------------------------------------------------------------------
 
-    def training_loss(self, x: torch.Tensor, mtp: bool = True, mask: torch.Tensor | None = None):
+    def training_loss(
+        self, x: torch.Tensor, mtp: bool = True, mask: torch.Tensor | None = None, loop_loss: float = 0.0
+    ):
         """Next-byte loss + ratio loss (learned routers) + MTP losses. x: (B, T) bytes. mask (B, T - 1): weight
-        per target byte (e.g. answer bytes only for instruct tuning); MTP losses are then skipped."""
-        y, aux = self(x, self.new_cache(x.shape[0]))
-        ce = F.cross_entropy(self.logits(y[:, :-1]).flatten(0, 1), x[:, 1:].flatten(), reduction="none")
-        if mask is None:
-            loss = ce.mean()
-        else:
+        per target byte (e.g. answer bytes only for instruct tuning); MTP losses are then skipped. loop_loss > 0:
+        deep supervision, the body's state after one random earlier loop is decoded to bytes and scored too."""
+        self.body.exit_loop = pick_exit_loop(self.cfg.n_loops) if loop_loss > 0 else None
+        try:
+            y, aux = self(x, self.new_cache(x.shape[0]))
+        finally:
+            exit_loop, self.body.exit_loop = self.body.exit_loop, None
+
+        def masked_ce(hidden):
+            ce = F.cross_entropy(self.logits(hidden[:, :-1]).flatten(0, 1), x[:, 1:].flatten(), reduction="none")
+            if mask is None:
+                return ce.mean()
             m = mask.flatten().to(ce)
-            loss = (ce * m).sum() / m.sum().clamp_min(1)
+            return (ce * m).sum() / m.sum().clamp_min(1)
+
+        loss = masked_ce(y)
+        if mask is not None:
             mtp = False
         info = {"lm": loss.item(), "bytes_per_patch": aux["b"].numel() / max(1, int(aux["b"].sum()))}
+        if "y_exit" in aux:
+            le = masked_ce(aux["y_exit"])
+            info[f"lm_loop{exit_loop}"] = le.item()
+            loss = loss + loop_loss * le
         if self.cfg.router != "none":
             r = DynamicChunker.ratio_loss(aux["p"], aux["b"], self.cfg.target_ratio)
             loss = loss + self.cfg.ratio_weight * r

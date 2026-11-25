@@ -35,6 +35,7 @@ from functools import partial
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from lilbits.layers.bpw_alloc import allocate_ranks, input_energy
 from lilbits.layers.ffn import SwiGLU
@@ -123,6 +124,11 @@ class MTPHead(nn.Module):
         return self.norm(x + self.mlp(x))
 
 
+def pick_exit_loop(n_loops: int) -> int | None:
+    """A uniformly random loop before the last (None with a single loop)."""
+    return int(torch.randint(0, n_loops - 1, ())) if n_loops > 1 else None
+
+
 @dataclass
 class Cache:
     prelude: list
@@ -132,6 +138,7 @@ class Cache:
     pos: int = 0
     e_buf: list = field(default_factory=list)  # prelude outputs of the current, incomplete block
     s_buf: list = field(default_factory=list)  # final-loop states of the current block
+    exit_coda: list = field(default_factory=list)  # coda states of the early-exit path (deep supervision)
 
     def snapshot(self) -> tuple:
         # states are replaced, never modified in place, so shallow copies are enough
@@ -176,6 +183,8 @@ class LoopedIndexLM(nn.Module):
         self.mtp = nn.ModuleList(MTPHead(d) for _ in range(cfg.n_mtp))
         self.use_index = True  # stage switches
         self.distill = False
+        self.grad_ckpt = False  # training: recompute each loop's activations in backward (RAM ~ one loop)
+        self.exit_loop: int | None = None  # training: also emit the state after this loop through the coda
 
     # ---- running ---------------------------------------------------------------------------------------
 
@@ -197,14 +206,19 @@ class LoopedIndexLM(nn.Module):
         e = x
         self.core.retrieval.write(e, cache.index)
         s, memory = torch.zeros_like(e), []
+        s_exit = s
         loops = cfg.n_loops
         for i in range(cfg.n_loops):
             set_loop(self.core, i)
             prev = s
-            s, cache.core[i], aux = self.core(
-                s, e, cache.core[i], memory, cache.index, cache.pos, self.use_index, self.distill
-            )
+            args = (s, e, cache.core[i], tuple(memory), cache.index, cache.pos, self.use_index, self.distill)
+            if self.grad_ckpt and torch.is_grad_enabled():
+                s, cache.core[i], aux = checkpoint(self.core, *args, use_reentrant=False)
+            else:
+                s, cache.core[i], aux = self.core(*args)
             memory.append(s)
+            if i == self.exit_loop:
+                s_exit = s
             for k, v in aux.items():
                 stats.setdefault(k, []).append(v)
             if halt_eps is not None and i > 0 and i < cfg.n_loops - 1:
@@ -219,6 +233,13 @@ class LoopedIndexLM(nn.Module):
         h = s
         for i, blk in enumerate(self.coda):
             h, cache.coda[i] = blk(h, cache.coda[i])
+        if self.exit_loop is not None and self.exit_loop < loops - 1:
+            he = s_exit  # set in the loop above (exit_loop < loops)
+            if not cache.exit_coda:
+                cache.exit_coda = [None] * len(self.coda)
+            for i, blk in enumerate(self.coda):
+                he, cache.exit_coda[i] = blk(he, cache.exit_coda[i])
+            stats.setdefault("exit_h", []).append(self.norm(he))
         cache.pos += tokens.shape[1]
         cache.e_buf.append(e)
         cache.s_buf.append(s)
@@ -242,12 +263,25 @@ class LoopedIndexLM(nn.Module):
 
     # ---- training -------------------------------------------------------------------------------------
 
-    def training_loss(self, tokens: torch.Tensor, mtp: bool = False, distill_weight: float = 1.0):
-        """Next-token loss (+ MTP losses, + index distillation when self.distill). tokens: (B, T)."""
+    def training_loss(
+        self, tokens: torch.Tensor, mtp: bool = False, distill_weight: float = 1.0, loop_loss: float = 0.0
+    ):
+        """Next-token loss (+ MTP losses, + index distillation when self.distill). tokens: (B, T). loop_loss > 0
+        adds deep supervision: the state after one random earlier loop also goes through the coda and is scored
+        (weight loop_loss), so every loop is trained to be a usable answer and later loops refine it."""
         stats: dict = {}
-        h = self.process(tokens, self.new_cache(tokens.shape[0]), stats=stats)
+        self.exit_loop = pick_exit_loop(self.cfg.n_loops) if loop_loss > 0 else None
+        try:
+            h = self.process(tokens, self.new_cache(tokens.shape[0]), stats=stats)
+        finally:
+            exit_loop, self.exit_loop = self.exit_loop, None
         loss = F.cross_entropy(self.logits(h[:, :-1]).flatten(0, 1), tokens[:, 1:].flatten())
         info = {"lm": loss.item()}
+        if stats.get("exit_h"):
+            he = torch.cat(stats["exit_h"], 1)
+            le = F.cross_entropy(self.logits(he[:, :-1]).flatten(0, 1), tokens[:, 1:].flatten())
+            info[f"lm_loop{exit_loop}"] = le.item()
+            loss = loss + loop_loss * le
         if mtp:
             hj = h
             for j, head in enumerate(self.mtp, start=1):

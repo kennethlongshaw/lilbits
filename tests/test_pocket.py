@@ -97,3 +97,19 @@ def test_littlebit_int8_core_and_lut_decode_match_native():
     pack_lut(m.body)
     g2, _ = m.generate(p, 12)
     assert torch.equal(g, g2)
+
+
+def test_deep_supervision_and_grad_checkpointing():
+    m = small(n_loops=3)
+    x = text(48)
+    grads = []
+    for ck in (False, True):
+        m.zero_grad()
+        m.body.grad_ckpt = ck
+        torch.manual_seed(3)
+        loss, info = m.training_loss(x, loop_loss=0.5)
+        assert any(k.startswith("lm_loop") for k in info)
+        loss.backward()
+        grads.append(torch.cat([p.grad.flatten() for p in m.parameters() if p.grad is not None]))
+    assert torch.allclose(grads[0], grads[1], atol=1e-6)
+    assert m.body.exit_loop is None
