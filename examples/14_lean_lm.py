@@ -42,6 +42,13 @@ def add_args(ap):
     ap.add_argument("--d", type=int, default=256, help="lean width")
     ap.add_argument("--heads", type=int, default=4)
     ap.add_argument("--head-dim", type=int, default=0, help="> 0: heads = width // head-dim (overrides --heads)")
+    ap.add_argument(
+        "--min-heads",
+        type=int,
+        default=4,
+        help="with --head-dim: at least this many GDN heads (narrow widths otherwise get 1 head; 4 measured better, "
+        "results/fused)",
+    )
     ap.add_argument("--baselines", default="size,width", help="FP16 baselines to train: size, width (comma list)")
     ap.add_argument("--layers", type=int, default=4)
     ap.add_argument("--bpw", type=float, default=0.55, help="LittleBit bits per weight of the block linears")
@@ -63,7 +70,7 @@ def add_args(ap):
 def _heads(args, d: int) -> int:
     if not getattr(args, "head_dim", 0):
         return args.heads
-    h = max(1, d // args.head_dim)
+    h = max(getattr(args, "min_heads", 1), d // args.head_dim)
     while d % h:
         h -= 1
     return h
