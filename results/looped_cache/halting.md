@@ -93,10 +93,51 @@ rloop:96,2,4 and rloop:128,1,4 behave the same way (`halting_rows.json`).
   it saves loops relative to the max trained depth (KL 3e-3 runs 4.5 of 8 loops at equal bpb), which a fixed depth of 5 also
   does.
 
+## Top 3 methods head to head: quality per unit of compute
+
+The three most promising rules from the survey and the test above, all with write-through states, against plain fixed
+depth, scored on bpb vs **MACs per byte with every cost counted**: block applications, the exit signal (KL: the
+256 x d head at every loop; acceleration: O(d); probe: O(d)), the write-only k/v/a/b projection of each exited byte
+and the skipped loops' state updates, embedding and readout.
+- **acceleration** `|Δh_r − Δh_{r-1}| / |h_r| < t` (untrained; first possible exit after loop 3)
+- **KL** between successive loops' next-byte distributions `< t` (untrained, Huginn)
+- **learned exit probe** (Ouro stage 2 / TRM-style, fit post hoc): ridge regression on O(d) features (normed hidden,
+  |Δh|, |accel|, loop index) of the *remaining gain* `CE_r − min_{r'>r} CE_r'`, fit on 32 x 8 x 128 training bytes of
+  full-depth trajectories; exit when the predicted gain is `< t` nats
+
+Same 8 held-out batches (8 KB) as above, paired. "vs fixed" = bpb of the rule minus fixed depth interpolated at the same
+MACs (negative = the rule is better); best point on each rule's curve:
+
+| model (fixed-depth curve, MACs/B: bpb) | acceleration | KL | learned probe |
+|---|---|---|---|
+| rloop:128,1,8 (261K: 2.647, 946K: 2.380, 1175K: 2.374, 1403K: **2.373**) | +0.001 (2.378 @ 1076K) | +0.005 (2.385 @ 963K) | +0.003 (2.380 @ 1055K) |
+| same, min 3 loops before any exit | +0.001 | +0.001 | +0.003 |
+| rloop:160,1,6 (400K: 2.531, 1116K: 2.292, 1475K: **2.282**) | +0.000 (2.286 @ 1346K) | +0.003 (2.285 @ 1622K) | +0.005 (2.287 @ 2018K) |
+| rloop:96,2,4 (284K: 2.380, 544K: 2.341, 803K: **2.336**) | +0.000 (2.336 @ 854K) | +0.002 (2.340 @ 645K) | +0.002 (2.341 @ 648K) |
+
+MACs to get within 0.005 bpb of the best fixed depth: rloop:128,1,8 fixed 1043K, accel 1086K, probe 1199K, KL never;
+rloop:160,1,6 fixed 1297K, accel 1318K, KL 1508K, probe never; rloop:96,2,4 fixed 548K, KL 640K, probe 684K, accel 854K.
+
+Ranking, most compute-efficient first:
+1. **Fixed depth at the right loop count.** Nothing beat it once all costs are counted. Almost all of the quality
+   per MAC is in loops 1 → 3-4 (rloop:128,1,8: −0.27 bpb for +685K MACs from 1 to 4 loops, then −0.007 more for
+   +457K to 6).
+2. **Acceleration** ties fixed depth (+0.000 to +0.001) at almost no signal cost. It is the one to use if adaptivity
+   is wanted, e.g. when the right depth varies by input in a way bpb doesn't show.
+3. **Learned probe** (+0.002 to +0.005). It is cheap at inference, but on this data it predicts remaining gain no better than the
+   untrained signals.
+4. **KL** (+0.001 to +0.005): the head at every loop is 15% of a d128 block, which eats its savings. At d512 the head
+   is ~4%, so KL would close most of that gap.
+
+Why adaptivity doesn't pay here: the write-through cost (~13% of a block per exited byte, plus state updates) and the
+signal's cost roughly cancel the loops saved, and on next-byte text the bytes that stop early are not much easier than
+a fixed depth already handles. Differences of ≤ 0.005 bpb are at the edge of this 8 KB eval's resolution; one seed.
+
 ## Recommendation for the flagship loop
 1. Train the trajectory with random depth (fixed prior), not a jointly trained gate. Add a gate later only if it beats
    the post-hoc readouts on held-out data.
-2. Exit on acceleration (or KL if the head is computed anyway), with a minimum of 2 loops, thresholds calibrated on
+2. Default to a fixed loop count picked on held-out data (the best compute per quality measured). If per-input
+   adaptivity is needed, exit on acceleration (or KL if the head is computed anyway), with a minimum of 2-3 loops, thresholds calibrated on
    held-out data with a risk-control rule (target: ≤ X bpb loss vs full depth), and checked on a second corpus.
 3. Always advance skipped loops' GDN states (write-through). In the Rust engine that means: after a byte exits at loop
    r, run one k/v/a/b projection of the exited hidden state and the remaining loops' state updates. That's an engine change, not

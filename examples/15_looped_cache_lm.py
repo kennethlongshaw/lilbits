@@ -157,6 +157,8 @@ def add_args(ap):
     ap.add_argument("--eval-batches", type=int, default=64, help="bpb64 batches (the first 8 are bpb's)")
     ap.add_argument("--test-loops", default="1,2,4,8", help="looped models: loop counts for the test-time depth sweep")
     ap.add_argument("--halt", type=int, default=0, help="> 0: rloop models, halting curves on this many test batches")
+    ap.add_argument("--halt-compare", type=int, default=0, help="> 0: rloop models, compute-vs-bpb of exit rules")
+    ap.add_argument("--min-loops", type=int, default=1, help="--halt-compare: loops before any exit")
     ap.add_argument("--threads-list", default="1,4", help="infer: engine thread counts")
     ap.add_argument("--repeats", type=int, default=3, help="infer: fresh processes per row (median)")
     ap.add_argument("--gen", type=int, default=1024, help="infer: greedy bytes decoded after the 512-byte prompt")
@@ -269,6 +271,28 @@ def test_fn(models, args):
             out[name]["halt_fixed_depth_bpb"] = fixed
             for wt in (False, True):
                 out[name][f"halt_{'write' if wt else 'freeze'}"] = halting_curves(m, k, r, hb, wt)
+        if args.halt_compare and name.startswith("rloop:"):
+            hb = ev[: args.halt_compare]
+            blocks = list(m.blocks)[:k]
+            full = sum(block_macs(b, b.mixer.n_heads)[0] for b in blocks)
+            d = m.embed.embedding_dim
+            fixed = []
+            for rr in range(1, r + 1):  # fixed depth: no signal, no write-through
+                set_loops(m, k, rr)
+                bpb = sum(m.loss(x, 0)[0].item() for x in hb) / len(hb) / math.log(2)
+                fixed.append(
+                    {
+                        "signal": "fixed",
+                        "threshold": rr,
+                        "bpb": bpb,
+                        "mean_loops": rr,
+                        "macs_per_byte": rr * full + 256 * d + d,
+                    }
+                )
+            set_loops(m, k, r)
+            src = source(args, "train", 4242)
+            probe = fit_probe(m, k, r, [src.sample(8, 128) for _ in range(32)])
+            out[name]["halt_compare"] = fixed + halting_compare(m, k, r, hb, probe, min_loops=args.min_loops)
     return out
 
 
@@ -344,6 +368,129 @@ def halting_curves(m: LeanLM, k: int, r: int, batches, write_through: bool) -> l
     return rows
 
 
+COMPARE = {  # finer threshold grids for the efficiency comparison (--halt-compare)
+    "kl": (3e-4, 1e-3, 2e-3, 3e-3, 5e-3, 1e-2, 2e-2, 3e-2, 6e-2, 0.1, 0.2),
+    "accel": (0.01, 0.02, 0.03, 0.05, 0.07, 0.1, 0.15, 0.2, 0.3, 0.4),
+    "probe": (0.002, 0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12, 0.2),  # predicted remaining gain (nats) < t
+}
+
+
+def block_macs(blk, h: int) -> tuple[int, int, int]:
+    """-> (MACs of one block application, its write-only k/v/a/b projection MACs, its write-only state update MACs)."""
+    mx, d = blk.mixer, blk.n1.normalized_shape[0]
+    lin = sum(mod.in_features * mod.out_features for mod in blk.modules() if isinstance(mod, nn.Linear))
+    dh = d // h
+    rec = 4 * h * dh * dh  # S^T k, S^T q, rank-1 update (two passes)
+    write = sum(getattr(mx, n).in_features * getattr(mx, n).out_features for n in ("k", "v", "a", "b"))
+    return lin + rec, write, 2 * h * dh * dh
+
+
+def _features(hh, prev_h, prev_d, rr: int, r: int):
+    """Exit-probe features after loop rr: normed hidden, |dh|/|h|, |accel|/|h|, loop one-hot, bias."""
+    nrm = hh.norm(dim=-1, keepdim=True)
+    d = (hh - prev_h) if prev_h is not None else torch.zeros_like(hh)
+    a = (d - prev_d) if prev_d is not None else torch.zeros_like(hh)
+    oh = torch.zeros(hh.shape[0], r)
+    oh[:, rr] = 1
+    return torch.cat([hh / nrm, d.norm(dim=-1, keepdim=True) / nrm, a.norm(dim=-1, keepdim=True) / nrm, oh], -1)
+
+
+@torch.no_grad()
+def fit_probe(m: LeanLM, k: int, r: int, batches, ridge: float = 1.0) -> torch.Tensor:
+    """Ouro-stage-2-style exit probe, fit post hoc on full-depth trajectories of training text: ridge regression of the
+    remaining gain CE_r - min_{r' > r} CE_r' (nats, >= 0) on O(d) features; exit when the prediction is < t."""
+    blocks = list(m.blocks)[:k]
+    X, Y = [], []
+    for x in batches:
+        h = m.embed(x[:, :-1])
+        ces, feats, prev_h, prev_d = [], [], None, None
+        for rr in range(r):
+            for blk in blocks:
+                h, _ = blk(h, None)
+            ce = -torch.log_softmax(m.head(m.norm(h)), -1).gather(-1, x[:, 1:, None])[..., 0]
+            hh = h.reshape(-1, h.shape[-1])
+            feats.append(_features(hh, prev_h, prev_d, rr, r))
+            prev_d = None if prev_h is None else hh - prev_h
+            prev_h = hh
+            ces.append(ce.reshape(-1))
+        ce = torch.stack(ces)  # (r, N)
+        for rr in range(r - 1):
+            X.append(feats[rr])
+            Y.append((ce[rr] - ce[rr + 1 :].min(0).values).clamp(min=0))
+    X, Y = torch.cat(X).double(), torch.cat(Y).double()
+    w = torch.linalg.solve(X.T @ X + ridge * torch.eye(X.shape[1], dtype=X.dtype), X.T @ Y)
+    return w.float()
+
+
+@torch.no_grad()
+def halting_compare(m: LeanLM, k: int, r: int, batches, probe: torch.Tensor, min_loops: int = 1) -> list[dict]:
+    """Byte-by-byte decode with write-through exits (skipped loops still advance their GDN states from the exited
+    hidden state). Each row: bpb and MACs per byte including the exit signal's own cost and the write-through cost.
+    KL needs the head at every loop; accel and the probe are O(d)."""
+    blocks = list(m.blocks)[:k]
+    d = m.embed.embedding_dim
+    full, wproj, wstate = (sum(x) for x in zip(*(block_macs(b, b.mixer.n_heads) for b in blocks), strict=True))
+    head = 256 * d
+
+    def run(sig: str | None, thr: float) -> dict:
+        nll = macs = loops = 0.0
+        n = 0
+        for x in batches:
+            B, T = x.shape[0], x.shape[1] - 1
+            states = [None] * (k * r)
+            for t in range(T):
+                h = m.embed(x[:, t : t + 1])
+                active = torch.ones(B, dtype=torch.bool)
+                out_lp = torch.zeros(B, 256)
+                prev_h = prev_d = prev_lp = None
+                for rr in range(r):
+                    was = active.clone()
+                    for j, blk in enumerate(blocks):
+                        h2, states[rr * k + j] = blk(h, states[rr * k + j])  # write-through for exited bytes
+                        h = torch.where(active.view(-1, 1, 1), h2, h)
+                    na = was.sum().item()
+                    loops += na
+                    macs += na * full + (B - na) * wstate  # skipped loops: state updates only
+                    hh = h[:, 0]
+                    need_head = sig == "kl" or rr == r - 1
+                    lp = torch.log_softmax(m.head(m.norm(h))[:, 0], -1)
+                    out_lp = torch.where(was[:, None], lp, out_lp)
+                    if sig is not None and rr < r - 1 and t > 0 and rr + 1 >= min_loops:
+                        if sig == "kl":
+                            stop = (lp.exp() * (lp - prev_lp)).sum(-1) < thr if prev_lp is not None else ~was
+                        elif sig == "accel":
+                            stop = (
+                                ((hh - prev_h) - prev_d).norm(dim=-1) / hh.norm(dim=-1) < thr
+                                if prev_d is not None
+                                else ~was
+                            )
+                        else:
+                            stop = _features(hh, prev_h, prev_d, rr, r) @ probe < thr
+                        macs += na * (head if need_head and rr < r - 1 else 4 * d + (d if sig == "probe" else 0))
+                        newly = was & stop
+                        macs += newly.sum().item() * wproj  # write-only k/v/a/b of the exited state, once
+                        if sig == "kl":
+                            macs -= newly.sum().item() * head  # its readout is the head already computed
+                        active = active & ~stop
+                    prev_d = None if prev_h is None else hh - prev_h
+                    prev_h, prev_lp = hh, lp
+                macs += B * head  # the readout of the exited (or last) loop
+                nll -= out_lp.gather(1, x[:, t + 1 : t + 2]).sum().item()
+                n += B
+        return {
+            "signal": sig or f"fixed {r}",
+            "threshold": thr,
+            "bpb": nll / n / math.log(2),
+            "mean_loops": loops / n,
+            "macs_per_byte": macs / n + d,  # + embedding lookup
+        }
+
+    rows = []
+    for sig, ts in COMPARE.items():
+        rows += [run(sig, t) for t in ts]
+    return rows
+
+
 def save_unique(m: LeanLM, k: int, r: int, fmt: str, path: Path) -> None:
     """Exported arrays with only the K unique blocks (l0..l{K-1}) plus loop=(K, R); the worker re-expands them."""
     arr = export(m, fmt)
@@ -413,7 +560,7 @@ EXAMPLE = Example(
     train_fn,
     test_fn,
     infer_fn,
-    runtime_args=("halt", "test_loops", "threads_list", "repeats", "gen", "fmt", "out"),
+    runtime_args=("halt", "halt_compare", "min_loops", "test_loops", "threads_list", "repeats", "gen", "fmt", "out"),
 )
 
 if __name__ == "__main__":
