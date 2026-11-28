@@ -156,6 +156,7 @@ def add_args(ap):
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--eval-batches", type=int, default=64, help="bpb64 batches (the first 8 are bpb's)")
     ap.add_argument("--test-loops", default="1,2,4,8", help="looped models: loop counts for the test-time depth sweep")
+    ap.add_argument("--halt", type=int, default=0, help="> 0: rloop models, halting curves on this many test batches")
     ap.add_argument("--threads-list", default="1,4", help="infer: engine thread counts")
     ap.add_argument("--repeats", type=int, default=3, help="infer: fresh processes per row (median)")
     ap.add_argument("--gen", type=int, default=1024, help="infer: greedy bytes decoded after the 512-byte prompt")
@@ -258,7 +259,89 @@ def test_fn(models, args):
                 depth[rr] = sum(c) / len(c) / math.log(2)
             set_loops(m, k, r)
             out[name]["bpb64_by_loops"] = depth
+        if args.halt and name.startswith("rloop:"):
+            hb = ev[: args.halt]
+            fixed = {}
+            for rr in range(1, r + 1):  # fixed depth on the same bytes (loop rr's states don't depend on deeper loops)
+                set_loops(m, k, rr)
+                fixed[rr] = sum(m.loss(x, 0)[0].item() for x in hb) / len(hb) / math.log(2)
+            set_loops(m, k, r)
+            out[name]["halt_fixed_depth_bpb"] = fixed
+            for wt in (False, True):
+                out[name][f"halt_{'write' if wt else 'freeze'}"] = halting_curves(m, k, r, hb, wt)
     return out
+
+
+HALT = {  # exit signal -> thresholds swept; a byte exits after loop r when the signal passes the threshold
+    "kl": (1e-3, 3e-3, 1e-2, 3e-2, 0.1),  # KL(p_r || p_{r-1}) < t (Huginn)
+    "dh": (0.02, 0.05, 0.1, 0.2, 0.3),  # |h_r - h_{r-1}| / |h_r| < t (relative state change, example 09)
+    "accel": (0.01, 0.03, 0.1, 0.2),  # |d_r - d_{r-1}| / |h_r| < t, d_r = h_r - h_{r-1} (two-scale "acceleration")
+    "conf": (0.5, 0.7, 0.8, 0.9, 0.95),  # max_b p_r(b) > t (confidence)
+}
+
+
+def _where_state(keep: torch.Tensor, new, old):
+    def pick(n, o):
+        return torch.where(keep.view(-1, *([1] * (n.dim() - 1))), n, o)
+
+    return tuple(pick(n, o) for n, o in zip(new, old, strict=True)) if isinstance(new, tuple) else pick(new, old)
+
+
+@torch.no_grad()
+def halting_curves(m: LeanLM, k: int, r: int, batches, write_through: bool) -> list[dict]:
+    """Byte-by-byte decode of held-out text with a per-byte exit after any loop (of K blocks), up to r loops.
+    Frozen loops (write_through=False) leave their GDN states untouched for that byte ("cache holes"); with
+    write_through the remaining loops still advance their states from the exited hidden state (outputs discarded)."""
+    blocks = list(m.blocks)[:k]
+
+    def run(sig: str | None, thr: float) -> dict:
+        nll = loops = 0.0
+        n = 0
+        for x in batches:
+            B, T = x.shape[0], x.shape[1] - 1
+            states = [None] * (k * r)
+            for t in range(T):
+                h = m.embed(x[:, t : t + 1])
+                active = torch.ones(B, dtype=torch.bool)
+                out_logp = torch.zeros(B, 256)
+                prev_h = prev_d = prev_lp = None
+                for rr in range(r):
+                    for j, blk in enumerate(blocks):
+                        i = rr * k + j
+                        h2, s2 = blk(h, states[i])
+                        keep_old = states[i] is not None and not write_through
+                        states[i] = _where_state(active, s2, states[i]) if keep_old else s2
+                        h = torch.where(active.view(-1, 1, 1), h2, h)
+                    loops += active.sum().item()
+                    lp = torch.log_softmax(m.head(m.norm(h))[:, 0], -1)
+                    out_logp = torch.where(active[:, None], lp, out_logp)
+                    if sig is not None and rr < r - 1 and t > 0:
+                        hh = h[:, 0]
+                        if sig == "kl" and prev_lp is not None:
+                            stop = (lp.exp() * (lp - prev_lp)).sum(-1) < thr
+                        elif sig == "dh" and prev_h is not None:
+                            stop = (hh - prev_h).norm(dim=-1) / hh.norm(dim=-1) < thr
+                        elif sig == "accel" and prev_d is not None:
+                            stop = ((hh - prev_h) - prev_d).norm(dim=-1) / hh.norm(dim=-1) < thr
+                        elif sig == "conf":
+                            stop = lp.exp().max(-1).values > thr
+                        else:
+                            stop = torch.zeros(B, dtype=torch.bool)
+                        if prev_h is not None:
+                            prev_d = hh - prev_h
+                        prev_h, prev_lp = hh, lp
+                        active = active & ~stop
+                    else:
+                        prev_d = None if prev_h is None else h[:, 0] - prev_h
+                        prev_h, prev_lp = h[:, 0], lp
+                nll -= out_logp.gather(1, x[:, t + 1 : t + 2]).sum().item()
+                n += B
+        return {"signal": sig or "full", "threshold": thr, "bpb": nll / n / math.log(2), "mean_loops": loops / n}
+
+    rows = [run(None, 0.0)]
+    for sig, ts in HALT.items():
+        rows += [run(sig, t) for t in ts]
+    return rows
 
 
 def save_unique(m: LeanLM, k: int, r: int, fmt: str, path: Path) -> None:
@@ -330,7 +413,7 @@ EXAMPLE = Example(
     train_fn,
     test_fn,
     infer_fn,
-    runtime_args=("test_loops", "threads_list", "repeats", "gen", "fmt", "out"),
+    runtime_args=("halt", "test_loops", "threads_list", "repeats", "gen", "fmt", "out"),
 )
 
 if __name__ == "__main__":
