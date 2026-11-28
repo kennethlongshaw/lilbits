@@ -83,7 +83,8 @@ rloop:160,1,6 (fixed: 1: 2.531, 2: 2.330, 3: 2.292, **4-5: 2.282**, 6: 2.288):
 rloop:96,2,4 and rloop:128,1,4 behave the same way (`halting_rows.json`).
 
 - **Advance the skipped loops' states.** Freezing them costs 0.01-0.04 bpb at every threshold, the same failure CHASE
-  reports for SSMs. With write-through, KL / accel / dh match or slightly beat fixed depth at the same average loops.
+  reports for SSMs. With write-through, KL / accel / dh land within ~0.006 bpb of fixed depth at the same average loops (sometimes
+  slightly better).
 - **KL and acceleration are the good signals; confidence is the worst.** Byte prediction is high-entropy, so a
   confident early byte is not a converged one: conf 0.7 costs 0.05-0.17 bpb. Acceleration matches KL at O(d) cost
   instead of a 256 x d head per loop (15% of a d128 block, 4% at d512).
