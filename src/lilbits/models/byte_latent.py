@@ -96,14 +96,37 @@ def entropy_boundaries(
     if theta_rel is not None:
         b[:, 1:] |= (entropy[:, 1:] - entropy[:, :-1]) > theta_rel
     b[:, 0] = True
-    if max_patch:
-        run = torch.zeros(entropy.shape[0], dtype=torch.long, device=entropy.device)
-        for t in range(entropy.shape[1]):
-            run = torch.where(b[:, t], torch.zeros_like(run), run + 1)
-            force = run >= max_patch
-            b[:, t] |= force
-            run[force] = 0
-    return b
+    return cap_patches(b, max_patch)
+
+
+def cap_patches(b: torch.Tensor, max_patch: int | None) -> torch.Tensor:
+    """Force a patch start every max_patch bytes inside long patches, in one vectorized pass: the k-th byte after
+    a natural start is a forced start iff k % max_patch == 0 (same result as a running counter, no Python loop)."""
+    if not max_patch:
+        return b
+    t = torch.arange(b.shape[1], device=b.device)
+    start = torch.where(b, t, torch.zeros_like(t)).cummax(1).values
+    return b | ((t - start) % max_patch == 0)
+
+
+def spacelike(x: torch.Tensor) -> torch.Tensor:
+    """SpaceByte (Slagle 2024): a byte is space-like unless it is an ASCII letter / digit or a UTF-8 continuation."""
+    x = x.long()
+    alnum = ((x >= 48) & (x <= 57)) | ((x >= 65) & (x <= 90)) | ((x >= 97) & (x <= 122))
+    return ~(alnum | ((x >= 0x80) & (x < 0xC0)))
+
+
+@torch.no_grad()
+def space_boundaries(x: torch.Tensor, max_patch: int | None = 16) -> torch.Tensor:
+    """SpaceByte-style patching with no patcher model: a patch starts right after the first space-like byte of a run
+    (so a word and the spaces / punctuation that end it share a patch). Start at s needs only x_{<s}, so decode
+    knows the next patch start before it samples that byte. (B, T) -> (B, T) bool."""
+    sp = spacelike(x)
+    b = torch.zeros_like(sp)
+    b[:, 1:] = sp[:, :-1]
+    b[:, 2:] &= ~sp[:, :-2]
+    b[:, 0] = True
+    return cap_patches(b, max_patch)
 
 
 @torch.no_grad()
@@ -140,18 +163,24 @@ class PatchPooling(nn.Module):
         self.o = nn.Linear(d_latent, d_latent, bias=False)
 
     def forward(self, h: torch.Tensor, pid: torch.Tensor, n_patches: int) -> torch.Tensor:
-        B, _T, _ = h.shape
-        pooled = h.new_full((B, n_patches, h.shape[-1]), float("-inf"))
+        B, T, d = h.shape
+        pooled = h.new_full((B, n_patches, d), float("-inf"))
         pooled = pooled.scatter_reduce(1, pid[..., None].expand_as(h), h, reduce="amax", include_self=True)
         pooled = torch.where(torch.isinf(pooled), torch.zeros_like(pooled), pooled)
         q = self.q(pooled)
         k, v = self.kv(h).chunk(2, -1)
         H, D = self.heads, q.shape[-1] // self.heads
-        sh = lambda t: t.view(B, -1, H, D).transpose(1, 2)
-        mask = pid[:, None, :] == torch.arange(n_patches, device=h.device)[None, :, None]  # (B, P, T)
-        y = F.scaled_dot_product_attention(sh(q), sh(k), sh(v), attn_mask=mask[:, None])
-        y = torch.nan_to_num(y)  # empty (padding) patches
-        return q + self.o(y.transpose(1, 2).reshape(B, n_patches, -1))
+        # segment softmax: each byte scores only against its own patch's query, O(T) instead of a (P, T) mask
+        qb = q.gather(1, pid[..., None].expand(B, T, q.shape[-1])).view(B, T, H, D)
+        s = (qb * k.view(B, T, H, D)).sum(-1) / math.sqrt(D)  # (B, T, H)
+        idx = pid[..., None].expand(B, T, H)
+        m = s.new_full((B, n_patches, H), float("-inf")).scatter_reduce(1, idx, s, reduce="amax", include_self=True)
+        w = (s - m.gather(1, idx)).exp()
+        den = s.new_zeros(B, n_patches, H).scatter_add(1, idx, w)
+        wv = w[..., None] * v.view(B, T, H, D)
+        num = v.new_zeros(B, n_patches, H, D).scatter_add(1, idx[..., None].expand(B, T, H, D), wv)
+        y = torch.nan_to_num(num / den[..., None])  # empty (padding) patches
+        return q + self.o(y.reshape(B, n_patches, -1))
 
 
 class ByteLatentTransformer(nn.Module):
@@ -175,9 +204,10 @@ class ByteLatentTransformer(nn.Module):
         self.head = nn.Linear(cfg.d_local, N_BYTES, bias=False)
 
     def forward(self, x: torch.Tensor, boundaries: torch.Tensor) -> torch.Tensor:
-        """x: (B, T) bytes, boundaries: (B, T) patch starts. Returns next-byte logits (B, T, 256)."""
+        """x: (B, T) bytes, boundaries: (B, T) patch starts (extra columns are ignored). Returns next-byte logits
+        (B, T, 256)."""
         B, T = x.shape
-        pid = patch_ids(boundaries).clamp(max=self.cfg.max_patches - 1)
+        pid = patch_ids(boundaries[:, :T]).clamp(max=self.cfg.max_patches - 1)
         P = int(pid.max()) + 1
         h = self.embed(x) + self.pos(torch.arange(T, device=x.device))
         for blk in self.encoder:
@@ -185,7 +215,9 @@ class ByteLatentTransformer(nn.Module):
         z = self.pool(h, pid, P) + self.patch_pos(torch.arange(P, device=x.device))
         for blk in self.latent:  # causal over patches
             z = blk(z)
-        # byte in patch j reads latent output j-1 (all of whose bytes precede it); patch 0 reads BOS
+        # byte in patch j reads latent output j-1 (all of whose bytes precede it); patch 0 reads BOS.
+        # (Tried: letting a patch's last byte read its own just-closed patch, so the next patch's first byte is
+        # predicted with fresh context. It was 0.03-0.04 bits/byte worse for both patchers at 800 steps.)
         z_prev = torch.cat([self.bos.expand(B, 1, -1), z[:, :-1]], 1)
         y = h + self.from_latent(z_prev.gather(1, pid[..., None].expand(B, T, z.shape[-1])))
         for blk in self.decoder:
@@ -316,3 +348,199 @@ class HNet(nn.Module):
             y = blk(y)
         ratio = self.chunker.ratio_loss(p, b, self.cfg.target_ratio)
         return self.head(self.norm(y)), ratio, {"bytes_per_chunk": b.numel() / b.sum().item(), "chunks": n}
+
+
+# ---------------------------------------------------------------------------------------------
+# streaming decode: every network keeps a cache, the inner network runs once per patch
+# ---------------------------------------------------------------------------------------------
+def block_step(blk: nn.Module, x: torch.Tensor, cache: list) -> torch.Tensor:
+    """One new position through a softmax TransformerBlock. x (B, 1, d); cache = [K, V] (grown in place)."""
+    a = blk.attn
+    B, T, C = x.shape
+    H = a.n_heads
+    h = blk.norm1(x)
+    sh = lambda t: t.view(B, T, H, C // H).transpose(1, 2)
+    q, k, v = a.q_norm(sh(a.q(h))), a.k_norm(sh(a.k(h))), sh(a.v(h))
+    if cache:
+        k, v = torch.cat([cache[0], k], 2), torch.cat([cache[1], v], 2)
+    cache[:] = [k, v]
+    x = x + a.o(F.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(B, T, C))
+    return x + blk.mlp(blk.norm2(x))
+
+
+def mamba_block_step(blk: nn.Module, x: torch.Tensor, state: list) -> torch.Tensor:
+    """One new position through an H-Net _MambaBlock. x (B, 1, d); state = [conv tail, SSM state] (in place)."""
+    m = blk.mix
+    B, _, C = x.shape
+    H, P, N = m.n_heads, m.head_dim, m.d_state
+    u = blk.n1(x)
+    xp = m.x(u)  # (B, 1, C), before the short conv
+    k = m.conv.kernel
+    tail = state[0] if state else xp.new_zeros(B, k - 1, C)
+    win = torch.cat([tail, xp], 1)  # last k inputs
+    xs = F.silu((win * m.conv.conv.weight[:, 0, :].T[None]).sum(1)).view(B, H, P)
+    b, c = m.bc(u).view(B, 2, H, N).unbind(1)
+    dt = F.softplus(m.dt(u)[:, 0] + m.dt_bias)  # (B, H)
+    S = state[1] if state else u.new_zeros(B, H, N, P)
+    S = S * (-m.A_log.exp() * dt).exp()[..., None, None] + b[..., None] * (xs * dt[..., None])[:, :, None]
+    y = torch.einsum("bhkv,bhk->bhv", S, c) + m.D[:, None] * xs
+    y = m.norm(y) * F.silu(m.z(u).view(B, H, P))
+    state[:] = [win[:, 1:], S]
+    x = x + m.o(y.reshape(B, 1, C))
+    return x + blk.mlp(blk.n2(x))
+
+
+def lm_step(lm: nn.Module, byte: torch.Tensor, t: int, cache: list) -> torch.Tensor:
+    """TinyLM (softmax blocks) next-byte logits after feeding one byte at position t. byte (B,); cache: per layer."""
+    x = lm.tok(byte[:, None]) + lm.pos.weight[t]
+    if not cache:
+        cache.extend([] for _ in lm.blocks)
+    for blk, c in zip(lm.blocks, cache, strict=True):
+        x = block_step(blk, x, c)
+    return lm.head(lm.norm(x))[:, 0]
+
+
+_SPACELIKE = frozenset(i for i in range(256) if bool(spacelike(torch.tensor(i))))
+
+
+class BLTStream:
+    """Batch-1 streaming BLT. `feed(byte)` returns next-byte logits (256,). Per byte: hash embedding (hashes in
+    plain ints), local encoder and local decoder steps, plus the entropy model's step when patching="entropy";
+    once per patch: pooling and one latent step. Everything is KV-cached, so nothing is recomputed. Produces the
+    logits of `model(x, boundaries)`."""
+
+    def __init__(
+        self,
+        model: ByteLatentTransformer,
+        patching: str = "space",
+        entropy_model=None,
+        theta=0.0,
+        max_patch: int | None = 16,
+    ):
+        assert patching in ("space", "entropy") and (patching == "space" or entropy_model is not None)
+        self.m, self.patching, self.ent, self.theta, self.max_patch = model, patching, entropy_model, theta, max_patch
+        self.t, self.hist, self.n_patches, self.patch = 0, [], 0, []
+        self.enc, self.dec, self.lat = ([[] for _ in s] for s in (model.encoder, model.decoder, model.latent))
+        self.ent_cache: list = []
+        self.z_new = self.z_read = model.bos.view(1, 1, -1)
+        self.next_starts = True
+        self.calls = {"encoder": 0, "decoder": 0, "entropy": 0, "latent": 0}
+
+    def _embed(self) -> torch.Tensor:
+        e, xs = self.m.embed, self.hist
+        out = e.byte.weight[xs[-1]]
+        for n, table in zip(e.ngrams, e.tables, strict=False):
+            h = 0
+            for j in range(n):  # same rolling hash as HashNgramEmbedding, zero-padded on the left
+                i = len(xs) - 1 - j
+                h = h * 257 + (xs[i] if i >= 0 else 0) + 1
+            out = out + table.weight[h % e.buckets]
+        return out.view(1, 1, -1)
+
+    def _next_starts(self, byte: int) -> bool:
+        if self.max_patch and len(self.patch) >= self.max_patch:
+            return True
+        if self.patching == "entropy":
+            logp = F.log_softmax(self._ent_logits, -1)
+            return bool(-(logp.exp() * logp).sum() > self.theta)
+        return byte in _SPACELIKE and (len(self.hist) < 2 or self.hist[-2] not in _SPACELIKE)
+
+    @torch.no_grad()
+    def feed(self, byte: int) -> torch.Tensor:
+        m, t = self.m, self.t
+        if self.next_starts:  # this byte opens a patch: its bytes read the newest closed patch
+            self.z_read = self.z_new
+        self.hist.append(byte)
+        h = self._embed() + m.pos.weight[t]
+        for blk, c in zip(m.encoder, self.enc, strict=True):
+            h = block_step(blk, h, c)
+        self.patch.append(h)
+        self.calls["encoder"] += 1
+        if self.patching == "entropy":
+            self._ent_logits = lm_step(self.ent, torch.tensor([byte]), t, self.ent_cache)[0]
+            self.calls["entropy"] += 1
+        self.next_starts = self._next_starts(byte)
+        if self.next_starts:  # the patch is complete: one pooling + latent step, read by the next patch's bytes
+            hp = torch.cat(self.patch, 1)
+            z = m.pool(hp, torch.zeros(1, hp.shape[1], dtype=torch.long), 1)
+            z = z + m.patch_pos.weight[min(self.n_patches, m.cfg.max_patches - 1)]
+            for blk, c in zip(m.latent, self.lat, strict=True):
+                z = block_step(blk, z, c)
+            self.z_new, self.patch, self.n_patches = z, [], self.n_patches + 1
+            self.calls["latent"] += 1
+        y = h + m.from_latent(self.z_read)
+        for blk, c in zip(m.decoder, self.dec, strict=True):
+            y = block_step(blk, y, c)
+        self.calls["decoder"] += 1
+        self.t += 1
+        return m.head(m.norm(y))[0, 0]
+
+
+class HNetStream:
+    """Batch-1 streaming H-Net: Mamba2 encoder / decoder steps per byte (fixed-size state), the router decides from
+    the encoder state, and the main network takes one KV-cached step per chunk. `feed(byte)` -> logits (256,)."""
+
+    def __init__(self, model: HNet):
+        self.m, self.t, self.n = model, 0, 0
+        self.enc, self.dec, self.main = ([[] for _ in s] for s in (model.encoder, model.decoder, model.main))
+        self.h_prev = None
+        self.zbar = torch.zeros(1, 1, model.cfg.d_outer)
+        self.calls = {"encoder": 0, "decoder": 0, "main": 0}
+
+    @torch.no_grad()
+    def feed(self, byte: int) -> torch.Tensor:
+        m = self.m
+        h = m.embed(torch.tensor([[byte]]))
+        for blk, s in zip(m.encoder, self.enc, strict=True):
+            h = mamba_block_step(blk, h, s)
+        if self.h_prev is None:
+            p = torch.ones(())
+        else:
+            cos = F.cosine_similarity(m.chunker.q(h), m.chunker.k(self.h_prev), dim=-1)[0, 0]
+            p = ((1 - cos) / 2).clamp(0, 1)
+        self.h_prev = h
+        if p >= 0.5:  # new chunk: one main-network step, then EMA smoothing with p
+            z = m.up_in(h) + m.chunk_pos.weight[self.n]
+            for blk, c in zip(m.main, self.main, strict=True):
+                z = block_step(blk, z, c)
+            self.zbar = p * m.down_out(z) + (1 - p) * self.zbar
+            self.n += 1
+            self.calls["main"] += 1
+        y = self.zbar + m.residual(h)  # straight-through confidence is exactly 1 in the forward pass
+        for blk, s in zip(m.decoder, self.dec, strict=True):
+            y = mamba_block_step(blk, y, s)
+        self.calls["encoder"] += 1
+        self.calls["decoder"] += 1
+        self.t += 1
+        return m.head(m.norm(y))[0, 0]
+
+
+class LMStream:
+    """Batch-1 streaming byte transformer (TinyLM, softmax blocks), KV-cached."""
+
+    def __init__(self, model: nn.Module):
+        self.m, self.t, self.cache = model, 0, []
+        self.calls = {"layers": 0}
+
+    @torch.no_grad()
+    def feed(self, byte: int) -> torch.Tensor:
+        out = lm_step(self.m, torch.tensor([byte]), self.t, self.cache)[0]
+        self.t += 1
+        self.calls["layers"] += 1
+        return out
+
+
+@torch.no_grad()
+def greedy_generate(stream, prompt: list[int], n_new: int) -> tuple[list[int], float]:
+    """Feed the prompt, then greedily generate n_new bytes. Returns (new bytes, decode seconds)."""
+    import time
+
+    for b in prompt[:-1]:
+        stream.feed(b)
+    logits, out = stream.feed(prompt[-1]), []
+    t0 = time.perf_counter()
+    for _ in range(n_new):
+        b = int(logits.argmax())
+        out.append(b)
+        logits = stream.feed(b)
+    return out, time.perf_counter() - t0
