@@ -25,6 +25,23 @@ Tried and dropped:
 - **H-Net chunk smoothing as one matmul** instead of a loop over chunks: 1.8x faster for that op, but no measurable
   change in an H-Net train step (the Mamba2 recurrence dominates).
 
+- **Multi-byte prediction heads + self-speculative decode** on BLT space patches (Medusa-style heads on the
+  local decoder output, trained 1,500 steps on the frozen model so the base loss is unchanged; one parallel
+  encoder/decoder pass verifies [next byte, k drafts], exact greedy acceptance, KV / patch / latent rollback,
+  latent step deferred until a byte of the next patch needs it). Output was identical to greedy, but slower:
+
+  | k drafts | bytes per verify pass | decode bytes/s (2 runs) |
+  |---|---|---|
+  | greedy | 1 | 2,418-2,784 |
+  | 1 | 1.60 | 2,068-2,576 |
+  | 2 | 1.96 | 2,059-2,463 |
+  | 3 | 2.18 | 1,816-1,841 |
+  | 4 | 2.31 | 1,399-1,463 |
+
+  On one CPU core at this size a step is per-call overhead, not weight traffic: a 3-byte verify pass costs about
+  1.5-2x a 1-byte step, and heads that only see the decoder state accept about one extra byte. It should pay
+  off where a step is weight-bandwidth bound (a much larger local decoder, or GPU), or with better drafts.
+
 Kept, same outputs, less wasted work:
 
 - Patch pooling as a segment softmax (each byte scores only against its own patch's query) instead of a dense
