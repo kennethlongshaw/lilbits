@@ -122,10 +122,11 @@ from lilbits.shakespeare import ShakespeareBytes
 
 
 def source(args, split: str, seed: int):
-    if getattr(args, "corpus", "shakespeare") == "mixed":
+    corpus = getattr(args, "corpus", "shakespeare")
+    if corpus != "shakespeare":
         from lilbits.corpus import CorpusBytes
 
-        return CorpusBytes(split, seed=seed)
+        return CorpusBytes(split, seed=seed, source=corpus)
     return ShakespeareBytes(split, seed=seed)
 
 
@@ -148,8 +149,9 @@ def add_args(ap):
     ap.add_argument(
         "--corpus",
         default="shakespeare",
-        choices=["shakespeare", "mixed"],
-        help="shakespeare: the 1 MB Shakespeare split; mixed: lilbits.corpus (~10 MB: Shakespeare, Gutenberg, webtext)",
+        choices=["shakespeare", "mixed", "fineweb_edu", "wiki40b"],
+        help="shakespeare: the 1 MB Shakespeare split; mixed: lilbits.corpus (~10 MB: Shakespeare, Gutenberg, "
+        "webtext); fineweb_edu / wiki40b: lilbits.corpus's ~100 MB FineWeb-Edu / Wiki40B splits",
     )
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--seq", type=int, default=128)

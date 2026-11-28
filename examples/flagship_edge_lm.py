@@ -8,6 +8,8 @@ Candidates:
             (SpaceByte boundaries, no router)
 
 Data: lilbits.corpus, ~10 MB of English (tiny-shakespeare + NLTK gutenberg + webtext, last 5% of each doc held out).
+`train --corpus fineweb_edu` (or wiki40b) uses ~100 MB of FineWeb-Edu (or Wiki40B) instead, with its own held-out set;
+the checkpoint remembers the corpus, so eval and export score on the matching test split.
 
     uv run python examples/flagship_edge_lm.py train runs/flagship/best.pt            # BEST config
     uv run python examples/flagship_edge_lm.py train runs/flagship/h.pt --arch hnet   # a candidate
@@ -63,8 +65,8 @@ def loss_fn(model: nn.Module, x: torch.Tensor) -> tuple[torch.Tensor, dict]:
     return model.loss(x)
 
 
-def held_out() -> list[torch.Tensor]:
-    src = CorpusBytes("test", seed=999)
+def held_out(corpus: str = "mixed") -> list[torch.Tensor]:
+    src = CorpusBytes("test", seed=999, source=corpus)
     return [src.sample(EVAL_BATCH, EVAL_SEQ) for _ in range(EVAL_BATCHES)]
 
 
@@ -108,14 +110,16 @@ def cmd_train(a) -> None:
             d_outer=a.d_outer, d_main=a.d_main, heads_outer=a.heads, heads_main=a.heads, n_enc=a.n_enc,
             n_main=a.n_main, n_dec=a.n_dec, align=a.align, max_patch=a.max_patch, wd=a.wd,
         )  # fmt: skip
+        cfg["corpus"] = a.corpus
         ck = None
+    corpus = cfg.get("corpus", "mixed")  # checkpoints from before --corpus trained on mixed
     torch.manual_seed(cfg["seed"])
     model = build(cfg)
     if ck is None and a.bytes_per_param > 0:  # steps from a fixed data : weights ratio (bytes counted as tokens)
         cfg["bytes_per_param"] = a.bytes_per_param
         cfg["steps"] = math.ceil(a.bytes_per_param * params(model) / (cfg["batch"] * cfg["seq"]))
     n_bytes = cfg["steps"] * cfg["batch"] * cfg["seq"]
-    cfg["train_bytes"], cfg["epochs"] = n_bytes, n_bytes / len(CorpusBytes("train"))
+    cfg["train_bytes"], cfg["epochs"] = n_bytes, n_bytes / len(CorpusBytes("train", source=corpus))
     if cfg["epochs"] > a.max_epochs:
         raise SystemExit(f"{cfg['epochs']:.1f} epochs > --max-epochs {a.max_epochs}: use a smaller model or ratio")
     print(f"{params(model):,} params, {cfg['steps']} steps = {n_bytes / 1e6:.1f} MB = {cfg['epochs']:.2f} epochs, "
@@ -126,8 +130,8 @@ def cmd_train(a) -> None:
         model.load_state_dict(ck["state"])
         opt.load_state_dict(ck["opt"])
         step, log = ck["step"], ck["log"]
-    src = CorpusBytes("train", seed=cfg["seed"])
-    ev = held_out()[:8]
+    src = CorpusBytes("train", seed=cfg["seed"], source=corpus)
+    ev = held_out(corpus)[:8]
 
     def save(final: bool = False) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,7 +183,7 @@ def cmd_eval(a) -> None:
     torch.set_num_threads(a.threads)
     m, ck = load(a.ckpt)
     t = time.perf_counter()
-    b, bpp = bpb(m, held_out())
+    b, bpp = bpb(m, held_out(ck["cfg"].get("corpus", "mixed")))
     res = {
         "ckpt": a.ckpt,
         "bpb64": b,
@@ -237,7 +241,7 @@ def cmd_export(a) -> None:
     np.savez(base.with_suffix(base.suffix + ".npz"), **arrays)
     size = bundle.write(base.with_suffix(base.suffix + ".lbm"), arrays)
     res = {"ckpt": a.ckpt, "fmt": a.fmt, "bundle_bytes": size, "engine_bpb64": engine_bpb(runtime(arrays, ck["cfg"]),
-           held_out())}  # fmt: skip
+           held_out(ck["cfg"].get("corpus", "mixed")))}  # fmt: skip
     Path(f"{base}.export.json").write_text(json.dumps(res, indent=1))
     print(json.dumps(res))
 
@@ -318,6 +322,8 @@ def main() -> None:
     t.add_argument("--log-every", type=int, default=250)
     t.add_argument("--bytes-per-param", type=float, default=20.0,
                    help="training bytes per parameter (sets --steps); 0: use --steps")  # fmt: skip
+    t.add_argument("--corpus", default="mixed", choices=["mixed", "fineweb_edu", "wiki40b"],
+                   help="mixed: ~10 MB Shakespeare + Gutenberg + webtext; fineweb_edu / wiki40b: ~100 MB")  # fmt: skip
     t.add_argument("--max-epochs", type=float, default=4.0, help="refuse runs that repeat the corpus more often")
     e = sub.add_parser("eval")
     e.add_argument("ckpt")
