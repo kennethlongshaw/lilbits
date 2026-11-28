@@ -2,8 +2,9 @@
 
 `export(model, fmt)` folds every RMSNorm gain, the kernel-1 "conv" scales and the GDN o_norm gain into the weights,
 merges q/k/v/gate/a/b into one matrix and SwiGLU gate/up into one, pads to multiples of 32 and packs them tile-major
-for `fused_kernel.c`. A layer is then 4 matmuls plus the gated delta rule, and decode is a C loop with no Python or
-op dispatch per byte (the main cost of PyTorch's path at these sizes).
+for the Rust engine in `rust/lilbits_fused` (SIMD through fearless_simd, runtime dispatch). A layer is then 4 matmuls
+plus the gated delta rule, and decode is a native loop with no Python or op dispatch per byte (the main cost of
+PyTorch's path at these sizes).
 
     fmt   weights                                     note
     f32   FP32                                        logits match PyTorch to ~1e-5
@@ -13,7 +14,9 @@ op dispatch per byte (the main cost of PyTorch's path at these sizes).
     w8a8  int8 x per-token int8 activations, VNNI     fastest; +0.000 bpb at d200, +0.001 at d512
 
 `FusedLM(arrays)` runs it with numpy + ctypes only (torch is needed for `export`, not for inference), so a
-deployment process does not pay for the torch import. Needs AVX-512 (+VNNI for w8a8). Batch 1.
+deployment process does not pay for the torch import. Fast path: AVX-512 (+VNNI for w8a8); other CPUs run the
+portable path (same results, slower matmuls). Batch 1. The engine is built with cargo on first use (cached by source
+hash); LILBITS_FUSED_LIB=path loads a prebuilt library with the same C ABI instead.
 
     arrays = export(model, "w8a8"); np.savez("m.npz", **arrays)
     lm = FusedLM(dict(np.load("m.npz")))
@@ -27,12 +30,11 @@ import hashlib
 import os
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 import numpy as np
 
-_SRC = Path(__file__).with_name("fused_kernel.c")
+_CRATE = Path(__file__).resolve().parents[3] / "rust" / "lilbits_fused"
 FMT = {"f32": 0, "f16": 1, "i8": 2, "i4": 3, "w8a8": 4}
 _lib: C.CDLL | None = None
 
@@ -188,24 +190,39 @@ def _cache_dir() -> Path:
     return Path(os.environ.get("LILBITS_CACHE", Path.home() / ".cache" / "lilbits"))
 
 
+def _crate_hash() -> str:
+    h = hashlib.sha256()
+    for f in sorted([_CRATE / "Cargo.toml", _CRATE / "Cargo.lock", *(_CRATE / "src").glob("*.rs")]):
+        h.update(f.name.encode() + f.read_bytes())
+    return h.hexdigest()[:16]
+
+
 def load_kernel() -> C.CDLL:
-    """Compile (once, cached by source hash) and load fused_kernel.c."""
+    """Build (once, cached by source hash) and load the Rust engine. LILBITS_FUSED_LIB: load that library instead."""
     global _lib
     if _lib is not None:
         return _lib
-    flags = ["-O3", "-march=native", "-ffast-math", "-fopenmp", "-shared", "-fPIC", "-std=gnu11"]
-    key = hashlib.sha256(_SRC.read_bytes() + " ".join(flags).encode()).hexdigest()[:16]
-    so = _cache_dir() / f"fused_kernel_{key}.so"
+    if os.environ.get("LILBITS_FUSED_LIB"):
+        _lib = _bind(C.CDLL(os.environ["LILBITS_FUSED_LIB"]))
+        return _lib
+    so = _cache_dir() / f"lilbits_fused_{_crate_hash()}.so"
     if not so.exists():
-        cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
-        if cc is None:
-            raise RuntimeError("no C compiler found (set CC)")
+        cargo = os.environ.get("CARGO") or shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
+        if not Path(cargo).exists() and shutil.which(cargo) is None:
+            raise RuntimeError("cargo not found: install Rust (https://rustup.rs) or set LILBITS_FUSED_LIB")
+        target = _cache_dir() / "cargo-target"
+        subprocess.run(
+            [cargo, "build", "--release", "--manifest-path", str(_CRATE / "Cargo.toml"), "--target-dir", str(target)],
+            check=True,
+            capture_output=True,
+        )
         so.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / so.name
-            subprocess.run([cc, *flags, str(_SRC), "-o", str(out), "-lm"], check=True, capture_output=True)
-            shutil.move(str(out), so)
-    lib = C.CDLL(str(so))
+        shutil.copy(target / "release" / "liblilbits_fused.so", so)
+    _lib = _bind(C.CDLL(str(so)))
+    return _lib
+
+
+def _bind(lib: C.CDLL) -> C.CDLL:
     fp = np.ctypeslib.ndpointer
     m = C.POINTER(_Model)
     lib.forward.argtypes = [
@@ -222,12 +239,12 @@ def load_kernel() -> C.CDLL:
     lib.generate.argtypes = [m, C.c_int, C.c_int, fp(np.float32), fp(np.float32), fp(np.float32), fp(np.int32)]
     lib.work_floats.argtypes = [m, C.c_int]
     lib.work_floats.restype = C.c_long
-    _lib = lib
     return lib
 
 
 def cpu_supported(fmt: str = "w8a8") -> bool:
-    """AVX-512F/BW (+VNNI for w8a8) on Linux /proc/cpuinfo."""
+    """Whether the AVX-512 fast path runs (AVX-512F/BW/VL, +VNNI for w8a8) per Linux /proc/cpuinfo. Without it the
+    engine still works through its portable path."""
     try:
         flags = Path("/proc/cpuinfo").read_text().split()
     except OSError:

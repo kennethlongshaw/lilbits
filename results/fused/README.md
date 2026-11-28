@@ -1,6 +1,7 @@
 # Cutting inference RAM and CPU at the same loss (Example 14 FP16 baseline, d200 x 8 GDN layers)
 
-Runtime: `src/lilbits/inference/fused.py` + `fused_kernel.c`. Bench: `benchmarks/fused_bench.py`.
+Runtime: `src/lilbits/inference/fused.py` + the Rust engine `rust/lilbits_fused` (fearless_simd). Bench: `benchmarks/fused_bench.py`.
+The tables below were measured with the original C kernel; the Rust engine that replaced it is compared at the end.
 
 Baseline: Example 14's `fp16_size` model (width 200, 8 GDN layers, 1 head, 4.2M params), retrained with the same
 settings and RNG (1000 steps x 8 x 128 B Shakespeare, seed 0): held-out bpb 2.3313, identical to the earlier run.
@@ -27,7 +28,7 @@ Weights exclude ~0.3 MB padding (rows to 32, columns to 32). Peak RSS growth dur
 for every runtime (buffers preallocated); the older 12 MiB figure was first-call allocation.
 
 ## What changed
-1. Fused C runtime (`lean_infer.c`, numpy + ctypes, no torch at inference). Each RMSNorm gain, the kernel-1
+1. Fused native runtime (first C, now Rust; numpy + ctypes, no torch at inference). Each RMSNorm gain, the kernel-1
    "conv" scales and the GDN o_norm gain are folded into the weights; q/k/v/gate/a/b are one matrix and SwiGLU
    gate/up are one, so a layer is 4 matmuls + the recurrence. Decode is a C loop: no Python or dispatcher per op,
    which was most of PyTorch's 4.4 ms/byte (the matmuls are 4.2M MACs/byte).
@@ -57,7 +58,7 @@ byte for byte, also with the prefill split in two; every quantized format stays 
 Quantized formats were checked on the trained model's bpb (tables).
 
 ## Limits
-- Kernels need AVX-512 (+VNNI for W8A8); no AVX2 / ARM fallback yet. Compiled with -ffast-math.
+- Fast path needs AVX-512 (+VNNI for W8A8); other CPUs run the portable path (correct, slower matmuls).
 - Batch 1; decode matmuls run on one thread; no speculative decoding (example 14 found it doesn't pay on CPU).
 - Training is unchanged (PyTorch); `lilbits.inference.fused.export` converts a model to the runtime's arrays.
 
@@ -91,3 +92,40 @@ Medians of 3 fresh processes. Weights: PyTorch FP32 vs packed runtime file.
   bytes is the limit, not model size. A bigger model needs more training tokens to pay off.
 - Next speedups at this size: multi-thread decode matmuls (the runtime keeps decode on 1 thread), int4 for
   some layers if +0.003 bpb is acceptable.
+
+## C kernel vs Rust engine (fearless_simd)
+Same exported files, same benchmark, 3 fresh processes each (medians), run back to back; "pf4" = prefill on 4
+threads. Each cell is C / Rust. Greedy text is byte-identical in every row.
+
+| config | bpb64 | decode ms/B | decode CPU ms/B | prefill B/s | process RSS MiB |
+|---|---|---|---|---|---|
+| d200h4 W8A8 | 2.3472 / 2.3472 | 0.327 / 0.300 | 0.370 / 0.343 | 7,905 / 12,586 | 40 / 41 |
+| d200h4 W8A8 pf4 | 2.3472 / 2.3472 | 0.292 / 0.259 | 0.390 / 0.287 | 12,044 / 7,798 | 41 / 42 |
+| d200 f32 | 2.3635 / 2.3635 | 0.990 / 1.201 | 1.098 / 1.308 | 2,504 / 3,199 | 55 / 55 |
+| d200 i8 | 2.3634 / 2.3634 | 0.425 / 0.480 | 0.460 / 0.531 | 3,849 / 4,432 | 41 / 41 |
+| d512h4 W8A8 | 2.3453 / 2.3452 | 1.526 / 1.602 | 1.682 / 1.804 | 2,189 / 2,445 | 65 / 65 |
+| d512h4 W8A8 pf4 | 2.3453 / 2.3452 | 1.578 / 1.543 | 1.773 / 1.730 | 3,253 / 2,631 | 65 / 69 |
+
+Within run-to-run noise on this shared VM (the same C config measured 0.25-0.33 ms/B across sessions), Rust is at
+parity: ahead on d200 W8A8, ~10-20% behind on the f32 / int8 rows and on 4-thread prefill (rayon vs OpenMP), so it
+replaced the C kernel. What it took to get there: activation quantization and SiLU's exp() as explicit SIMD
+(the C build got vector exp and vectorized reductions from -ffast-math; Rust has no fast-math). The Rust engine also
+runs on CPUs without AVX-512 (portable path, verified by forcing it with `--cfg disable_dispatch_avx512`).
+
+## Cache behaviour
+`perf stat` can't read hardware counters here (Firecracker VM: "no PMU driver, software events only"), so:
+
+Single-core read bandwidth on this Xeon (AVX-512 loads, `bw.c`-style microbenchmark):
+| buffer | 64 KB | 256 KB-1 MB | 1.5 MB | 2 MB | 3-64 MB | 256 MB+ |
+|---|---|---|---|---|---|---|
+| GB/s | 117 | 137-140 | 111 | 55 | 24-31 | 12.5 |
+L2 is 2 MB per core (fast up to ~1.5 MB), L3 260 MB shared.
+
+- Decode streams every weight once per byte. d200 W8A8 = 5.0 MB in ~0.21 ms of matmul = ~24 GB/s: exactly the
+  L3 rate. d512 (28 MB) runs at ~19 GB/s. Decode is L3-bandwidth bound, not compute bound.
+- Cachegrind (D1 48 KB, LL = one 2 MB L2): 16 extra decode bytes add 1.30M LL read misses = 81K x 64 B = 5.2 MB per
+  byte, i.e. the whole weight set misses L2 every step. The recurrent state (0.32 MB with 4 heads) and activations
+  stay cached: no other misses.
+- Same run with LL = 8 MB (the 4 cores' L2s together): 16 extra decode bytes add ~0 misses.
+So the next speedup is splitting the decode matmul rows across the 4 cores with persistent pinned threads, so each
+core keeps its 1.25 MB slice of the d200 weights in its own L2 (~110+ GB/s instead of 24).

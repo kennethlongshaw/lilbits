@@ -3,10 +3,8 @@ import pytest
 import torch
 from torch import nn
 
-from lilbits.inference.fused import FusedLM, cpu_supported, export
+from lilbits.inference.fused import FusedLM, export
 from lilbits.models.lean_lm import LeanLM
-
-pytestmark = pytest.mark.skipif(not cpu_supported("w8a8"), reason="fused kernel needs AVX-512 + VNNI")
 
 
 def make(d=200, heads=1, layers=3, seed=0):
