@@ -183,6 +183,17 @@ def _decode_ms(fn, n: int) -> tuple[float, torch.Tensor]:
     return (time.perf_counter() - t) / n * 1e3, toks
 
 
+@torch.no_grad()
+def _decode_only_ms(m: LeanLM, prompt: torch.Tensor, greedy: torch.Tensor) -> float:
+    """ms per byte of single-byte decode steps from a prefilled state, replaying the greedy bytes."""
+    _, states = m(prompt)
+    toks = greedy[:, :-1]  # the bytes generate() fed back after the prefill
+    t = time.perf_counter()
+    for i in range(toks.shape[1]):
+        _, states = m(toks[:, i : i + 1], states)
+    return (time.perf_counter() - t) / toks.shape[1] * 1e3
+
+
 def infer_fn(models, args):
     prompt = ShakespeareBytes("test", seed=7).sample(1, args.prompt)[:, : args.prompt]
     out: dict = {"lut_kernel": kernel_info(), "threads": torch.get_num_threads()}
@@ -198,7 +209,10 @@ def infer_fn(models, args):
             t = time.perf_counter()
             _, states = m(prompt)
             res["prefill_bytes_per_s"] = args.prompt / (time.perf_counter() - t)
-            res["greedy_ms_per_byte"], greedy = _decode_ms(lambda m=m: m.generate(prompt, args.gen), args.gen)
+            greedy_total_ms, greedy = _decode_ms(lambda m=m: m.generate(prompt, args.gen), args.gen)
+            # generate() includes the prompt prefill; report decode alone (per-byte steps after prefill)
+            res["greedy_ms_per_byte"] = _decode_only_ms(m, prompt, greedy)
+            res["greedy_incl_prefill_ms_per_byte"] = greedy_total_ms
             if name == "lean":
                 t = time.perf_counter()
                 spec, stats = m.speculative_generate(prompt, args.gen)

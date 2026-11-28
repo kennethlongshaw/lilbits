@@ -214,18 +214,14 @@ class LUTLittleBitLinear(nn.Module):
             W += h[i][:, None] * ((Su * l[i]) @ Sv) * g[i][None, :]
         return W
 
-    def _float_signs(self) -> list[tuple[torch.Tensor, torch.Tensor]]:
-        """Per path (S_V (in x r), S_U^T (r x out)) as +-1 floats, for prefill. Built on first use and shared by
-        every scale set (all loops), so prefill holds rank * (in + out) floats per path, not a dense weight."""
-        cache = self.__dict__.get("_signs")
-        if cache is None:
-            cache = []
-            for i in range(self.paths):
-                Su = unpack_sign_codes(self.U_codes[i], self.out_features, self.rank)
-                Sv = unpack_sign_codes(self.V_codes[i], self.rank, self.in_features)
-                cache.append((Sv.t().contiguous(), Su.t().contiguous()))
-            self.__dict__["_signs"] = cache
-        return cache
+    def _float_signs(self):
+        """Per path (S_V (in x r), S_U^T (r x out)) as +-1 floats, for prefill. Unpacked on every call and freed
+        after use (one path at a time), never cached: a cache would hold rank * (in + out) FP32 values per path,
+        ~32x the packed weights, for the life of the model."""
+        for i in range(self.paths):
+            Su = unpack_sign_codes(self.U_codes[i], self.out_features, self.rank)
+            Sv = unpack_sign_codes(self.V_codes[i], self.rank, self.in_features)
+            yield Sv.t().contiguous(), Su.t().contiguous()
 
     def forward(self, x: torch.Tensor, scales: tuple | None = None, key=None) -> torch.Tensor:
         """scales: optional (g, l, h) FP32 (P, n) overrides, e.g. per-loop effective scales. `key` is accepted
