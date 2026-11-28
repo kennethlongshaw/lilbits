@@ -42,6 +42,24 @@ Tried and dropped:
   1.5-2x a 1-byte step, and heads that only see the decoder state accept about one extra byte. It should pay
   off where a step is weight-bandwidth bound (a much larger local decoder, or GPU), or with better drafts.
 
+- **BLT-S self-speculation** (Fast BLT, Kallini et al. 2026, arXiv:2605.08044), as the paper describes it: the
+  local decoder drafts k bytes past patch boundaries reading the last available latent output (no latent step),
+  then one pass verifies [next byte, drafts] with the full model, all patches the window closes going through
+  the latent in one call; exact greedy match, rollback of KV / patch / latent state. Output identical to greedy.
+  Drafts are accepted often and latent calls drop a lot, but wall time is worse. Medians of 5 interleaved
+  rounds, 8 prompts x 192 bytes; latent calls over 4 prompts including prompt prefill:
+
+  | model | greedy bytes/s | k=4 | k=8 | k=16 | bytes per pass (k=4 / 8 / 16) | latent calls (greedy -> k=16) |
+  |---|---|---|---|---|---|---|
+  | BLT space patches | 2,698 | 2,109 | 2,068 | 1,989 | 4.9 / 8.3 / 13.7 | 104 -> 56 |
+  | BLT entropy patches | 1,383 | 1,291 | 1,279 | 1,150 | 4.7 / 7.5 / 11.5 | 307 -> 71 |
+
+  BLT-S saves global-model (latent) calls, but every byte still pays for sequential local encoder and decoder
+  steps while drafting, and the verify pass adds a parallel decoder pass. Here the latent is a small part of a
+  decode step (2 x d128 layers once per 6.6 bytes, next to 1 + 1 x d64 local layers every byte), and space
+  patching already halved its calls, so there is little left to save. Fast BLT's gains (up to 77% less memory
+  traffic) are for models whose global transformer dominates the cost.
+
 Kept, same outputs, less wasted work:
 
 - Patch pooling as a segment softmax (each byte scores only against its own patch's query) instead of a dense
