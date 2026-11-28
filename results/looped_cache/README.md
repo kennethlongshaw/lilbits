@@ -4,12 +4,15 @@ Question: looped (weight-shared) depth lost on CPU decode because every loop re-
 is weight-bandwidth bound. If a looped block's unique weights fit in L2 and its loops run back to back per byte,
 do loops 2..R run at L2 speed, and does that make looped depth beat a plain GDN stack of the same quality?
 
-Short answer: **the cache fix works, but looped depth still loses at matched quality.** Sharing one weight copy
-across loops makes the same looped model up to 2x faster per byte on one thread when its unrolled weights don't fit
-in L2. But a plain stack of the same held-out bpb is always cheaper still, because it has 2-4x fewer MACs per byte, and
-at the 20 bytes/param training ratio every model this CPU can train fits in L2 anyway. Looping does buy quality per
-*stored* parameter at that ratio, so it helps only where weight bytes are the constraint (flash, download, RAM), and
-never decode speed or CPU per byte.
+Short answer:
+- **The cache fix works when the shared block fits the decoding cores' L2.** The same looped model with one weight
+  copy decodes up to 2x faster than with per-loop copies (d200 on 1 thread; d512 with a 3.7 MB block on 4 threads,
+  1.7x). Blocks larger than total L2 (8 MB here) gain 1.1-1.3x.
+- **At matched quality, a plain stack is still cheaper per byte**: it has 2-4x fewer MACs per byte, and that outweighs
+  the cache gain at every size measured.
+- **Looping buys quality per stored parameter** at 20 bytes/param, so it fits when weight bytes are the constraint.
+- **As test-time compute, a latent loop is cheap** (~1/16 of a decoded thinking byte at d512, 4 threads). Random-depth
+  training makes depth selectable at test time, but bpb only improves up to the trained loop count and gets worse past it.
 
 Setup: `examples/15_looped_cache_lm.py`. LeanLM GDN blocks, 4 heads; `loop:D,K,R` = K unique blocks applied R times
 per byte, each application with its own GDN state; `plain:D,L` = the plain stack. Inference is the fused Rust engine
@@ -91,6 +94,61 @@ bpb64 (held out), with decode on 1 thread (the fastest at this size; more thread
   0.03 is at the edge of noise; one seed was run.
 - RSS is 33-34 MiB for every model at this size; the weights are < 1 MB.
 
+## 3. At sizes that don't fit L2 (untrained weights; speed doesn't depend on training)
+
+The trained models above are micro proxies, so their weights fit L2 either way. These widths are the regime they
+stand in for. 1-step-trained models, W8A8, 512 decode bytes, medians of 5. Decode ms/B, hot / cold:
+
+| model | unique MB | streamed MB/B | 1 thread | 4 threads |
+|---|---|---|---|---|
+| plain:512,8 | 28.0 | 28.0 | 1.459 | 0.663 |
+| loop:512,1,2 | 3.7 | 7.2 | 0.355 / 0.369 | 0.086 / 0.119 |
+| loop:512,1,4 | 3.7 | 14.2 | 0.655 / 0.720 | 0.187 / 0.290 |
+| loop:512,1,8 | 3.7 | 28.0 | 1.224 / 1.476 | **0.340** / 0.582 |
+| loop:512,2,4 | 7.2 | 28.0 | 1.392 / 1.451 | 0.438 / 0.680 |
+| plain:768,8 | 62.5 | 62.5 | 3.339 | 1.155 |
+| loop:768,1,4 | 8.2 | 31.5 | 1.568 / 1.626 | 0.467 / 0.698 |
+| loop:768,1,8 | 8.2 | 62.5 | 3.127 / 3.357 | 0.967 / 1.272 |
+| plain:1024,4 | 55.7 | 55.7 | 3.128 | 1.077 |
+| loop:1024,1,2 | 14.3 | 28.1 | 1.370 / 1.422 | 0.559 / 0.538 |
+| loop:1024,1,4 | 14.3 | 55.7 | 2.783 / 3.045 | 1.038 / 1.162 |
+
+- The rule: shared weights pay off when the unique block fits the L2 of the cores decoding it (~1.5 MB fast per core
+  here). A 3.7 MB block on 4 threads (0.9 MB per core) gets 1.6-1.7x; on 1 thread, or at 7-8 MB on 4 threads, 1.0-1.5x;
+  a 14 MB block ~1.1x. Process RSS drops by the copies not made (40 vs 64 MiB at d512 x 8).
+- Marginal cost of one more latent loop at d512, 4 threads, hot: ~0.042 ms. A plain d512 x 8 decoded byte (what a
+  thinking token costs) is 0.66 ms, so a loop costs ~1/16 of a thinking token: 1/8 from running one block instead of
+  eight, ~2x from L2.
+
+## 4. Looping as test-time compute (random depth in training)
+
+`rloop:D,K,R` trains with a loop count drawn uniformly from 1..R every step, so the loop count can be chosen at test
+time. 20 bytes/param, mixed corpus. bpb64 (held out) vs test-time loops, with decode ms/B (1 thread, hot):
+
+| model (params) | 1 | 2 | 3 | 4 | 6 | 8 | 12 | 16 |
+|---|---|---|---|---|---|---|---|---|
+| rloop:128,1,4 (246K) | 2.544 | 2.433 | **2.414** | 2.420 | 2.463 | 2.529 | 2.689 | 2.854 |
+| rloop:128,1,8 (246K) | 2.654 | 2.453 | 2.406 | 2.389 | **2.383** | 2.393 | 2.429 | 2.477 |
+| rloop:96,2,4 (267K) | 2.390 | 2.349 | **2.343** | 2.350 | 2.380 | 2.424 | 2.530 | 2.645 |
+| rloop:160,1,6 (375K) | 2.550 | 2.342 | 2.304 | **2.295** | 2.302 | 2.324 | 2.389 | 2.467 |
+| decode ms/B, rloop:128,1,8 | 0.009 | 0.014 | | 0.027 | 0.044 | 0.049 | | |
+| decode ms/B, rloop:160,1,6 | 0.011 | 0.028 | | 0.037 | 0.060 | 0.073 | | |
+
+Reference points on the same corpus and ratio: fixed loop:128,1,4 2.345, loop:96,2,2 2.318; plain:96,2 2.349,
+plain:64,4 2.353 (0.010 ms/B), plain:128,1 2.471.
+
+- Test-time depth works, but only inside the trained range: going from 1 to 3-4 loops gives most of the gain (0.11-0.25 bpb), it
+  saturates around the mean-to-max trained depth, and it gets *worse* beyond the max trained count. Extra loops are
+  not open-ended thinking with this recipe. Extrapolating would need a recurrence built for it (Huginn's input
+  injection and random initial state, or an exit gate as in example 06), which this example does not have.
+- Flexible depth costs quality at a fixed depth: rloop:128,1,8 at 4 loops gets 2.389, vs 2.345 for the model trained at
+  exactly 4 loops.
+- The best model here is rloop:160,1,6 at 4 loops (2.295, 375K params, 0.037 ms/B). It has more params than the plain
+  references, so it isn't a matched comparison; a plain ~375K model was not trained.
+- bpb on next-byte text is a weak probe of "thinking": most bytes don't need more compute. A fair test of loops vs
+  thinking tokens needs a task where extra compute should help (example 12's tasks, example 06's depth curves), with
+  a plain model allowed the same latency budget in decoded thinking bytes. Not run here.
+
 ## What this means for the flagship
 - If the constraint is **decode speed or CPU per byte**, don't loop: at any quality we measured, a plain GDN stack is
   cheaper. Shared weights fix the re-streaming, but the loops' MACs stay.
@@ -100,6 +158,10 @@ bpb64 (held out), with decode on 1 thread (the fastest at this size; more thread
 - **Batching loop iterations doesn't apply to decode.** Loop r+1 of a byte needs loop r's output, and the next byte
   needs the last loop's argmax, so there is nothing independent to batch. Prefill already batches across bytes (64
   per weight pass), and looped prefill was 1.6-3x slower than plain at matched quality too.
+- For test-time compute: a latent loop is ~1/16 the cost of a decoded thinking byte at d512 (section 3), and random-
+  depth training lets you choose depth at test time, but gains stop at the trained depth. Train with the largest loop
+  count you will want to use at inference, and plan an extrapolating recurrence (input injection) if open-ended
+  thinking is the goal.
 - Not tested: the bandwidth-bound regime *at* 20 bytes/param (needs > ~1.5M params, so > 30 MB of unique text and
   hours of CPU training per model); input injection per loop (Huginn style); multiple seeds.
 
@@ -113,7 +175,8 @@ bpb64 (held out), with decode on 1 thread (the fastest at this size; more thread
         --gen 2048 --out results/looped_cache/rows.json
 Sweep 1: `--steps 1000 --batch 8 --seq 128` with the models in table 1. Each model's init is seeded from (seed, spec),
 so groups trained in parallel and merged equal one process training them all. Raw rows: `rows_s0.json` (sweep 1),
-`rows_r20_shakespeare.json`, `rows_r20_mixed.json`.
+`rows_r20_shakespeare.json`, `rows_r20_mixed.json`, `rows_speed_big.json` (section 3: `--steps 1` models),
+`rows_rloop_mixed.json` (section 4: `rloop:` models with `--test-loops`).
 
 Side note: in the bench worker, numpy's idle OpenBLAS threads spun during engine decode and inflated CPU per byte
 ~4x at 1 thread (0.16 vs 0.03 ms/B on plain:200,2). The worker sets OPENBLAS_NUM_THREADS=1.

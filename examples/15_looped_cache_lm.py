@@ -8,6 +8,8 @@ core here, ~50-60 GB/s for the matvec kernel) across the loops of a byte:
     loop:D,K,R    LeanLM GDN blocks, K unique blocks applied R times per byte (K*R block applications, each with its
                   own GDN state, as example 09's per-loop state); the loops of one byte run back to back, so loop 2..R
                   reread the block that loop 1 just pulled into cache
+    rloop:D,K,R   the same, trained with a random loop count in 1..R per step, so test-time depth can vary (test sweeps
+                  --test-loops; infer benchmarks each)
     plain:D,L     the plain LeanLM GDN stack (L blocks), the baseline at matched quality
 
 train   Shakespeare bytes, the results/fused recipe (AdamW 3e-3 cosine, --steps x --batch x --seq), every model on the
@@ -153,6 +155,7 @@ def add_args(ap):
     ap.add_argument("--seq", type=int, default=128)
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--eval-batches", type=int, default=64, help="bpb64 batches (the first 8 are bpb's)")
+    ap.add_argument("--test-loops", default="1,2,4,8", help="looped models: loop counts for the test-time depth sweep")
     ap.add_argument("--threads-list", default="1,4", help="infer: engine thread counts")
     ap.add_argument("--repeats", type=int, default=3, help="infer: fresh processes per row (median)")
     ap.add_argument("--gen", type=int, default=1024, help="infer: greedy bytes decoded after the 512-byte prompt")
@@ -165,6 +168,12 @@ def parse(spec: str) -> tuple[int, int, int]:
     kind, nums = spec.split(":")
     v = [int(x) for x in nums.split(",")]
     return (v[0], v[1], 1) if kind == "plain" else (v[0], v[1], v[2])
+
+
+def set_loops(m: LeanLM, k: int, r: int) -> None:
+    """Point the model at its K unique blocks applied r times (test-time depth: any r, same weights)."""
+    uniq = list(m.blocks)[:k]
+    m.blocks = nn.ModuleList([uniq[i % k] for i in range(k * r)])
 
 
 def looped_lm(d: int, k: int, r: int, heads: int) -> LeanLM:
@@ -193,17 +202,28 @@ def train_fn(models, args, fab):
         steps = args.steps
         if args.bytes_per_param:
             steps = math.ceil(args.bytes_per_param * n_par / (args.batch * args.seq))
+        _, k, r = parse(name)
+        g = torch.Generator().manual_seed(args.seed + 17)
+
+        rand = name.startswith("rloop:")
+
+        def loss(mod, x, m=m, k=k, r=r, g=g, rand=rand):
+            if rand:  # random depth per step, so any loop count works at test time (Huginn-style)
+                set_loops(m, k, int(torch.randint(1, r + 1, (1,), generator=g)))
+            return mod.loss(x, 0.0)
+
         t = time.perf_counter()
         info = fit(
             fab,
             m,
             lambda _, src=src: src.sample(args.batch, args.seq),
-            lambda mod, x: mod.loss(x, 0.0),
+            loss,
             steps,
             lr=args.lr,
             schedule="cosine",
             optimizer=torch.optim.AdamW(m.parameters(), lr=args.lr, betas=(0.9, 0.95), foreach=False),
         )
+        set_loops(m, k, r)
         seen = steps * args.batch * args.seq
         out[name] = {
             "ce": info["ce"],
@@ -229,6 +249,15 @@ def test_fn(models, args):
         ce = [m.loss(x, 0)[0].item() for x in ev]
         out[name] = {"bpb": sum(ce[:8]) / 8 / math.log(2), "bpb64": sum(ce) / len(ce) / math.log(2)}
         out[name]["params"] = sum(p.numel() for p in m.parameters())
+        _, k, r = parse(name)
+        if name.startswith("loop") or name.startswith("rloop"):
+            depth = {}
+            for rr in (int(x) for x in args.test_loops.split(",")):  # test-time depth sweep
+                set_loops(m, k, rr)
+                c = [m.loss(x, 0)[0].item() for x in ev]
+                depth[rr] = sum(c) / len(c) / math.log(2)
+            set_loops(m, k, r)
+            out[name]["bpb64_by_loops"] = depth
     return out
 
 
@@ -236,6 +265,8 @@ def save_unique(m: LeanLM, k: int, r: int, fmt: str, path: Path) -> None:
     """Exported arrays with only the K unique blocks (l0..l{K-1}) plus loop=(K, R); the worker re-expands them."""
     arr = export(m, fmt)
     keep = {key: v for key, v in arr.items() if not (key[0] == "l" and int(key.split(".")[0][1:]) >= k)}
+    keep["meta"] = keep["meta"].copy()
+    keep["meta"][6] = k * r  # layer applications
     np.savez(path, **keep, loop=np.array([k, r], np.int64))
 
 
@@ -247,11 +278,15 @@ def infer_fn(models, args):
     jobs = []
     for name, m in models.items():
         _, k, r = parse(name)
-        p = tmp / f"{name.replace(':', '_').replace(',', '_')}.npz"
-        save_unique(m, k, r, args.fmt, p)
-        for th in (int(x) for x in args.threads_list.split(",")):
-            for mode in ("hot", "cold") if r > 1 else ("hot",):
-                jobs.append((name, mode, th, p))
+        variants = [(name, r)]
+        if name.startswith("rloop:"):  # random-depth models: decode cost at every test-time loop count
+            variants = [(f"{name}@{rr}", rr) for rr in (int(x) for x in args.test_loops.split(","))]
+        for label, rr in variants:
+            p = tmp / f"{label.replace(':', '_').replace(',', '_').replace('@', '_at')}.npz"
+            save_unique(m, k, rr, args.fmt, p)
+            for th in (int(x) for x in args.threads_list.split(",")):
+                for mode in ("hot", "cold") if rr > 1 and not name.startswith("rloop:") else ("hot",):
+                    jobs.append((label, mode, th, p))
     runs: dict = {j[:3]: [] for j in jobs}
     for _ in range(args.repeats):  # round-robin: drift on this shared VM lands on every row alike
         for name, mode, th, p in jobs:
@@ -295,7 +330,7 @@ EXAMPLE = Example(
     train_fn,
     test_fn,
     infer_fn,
-    runtime_args=("threads_list", "repeats", "gen", "fmt", "out"),
+    runtime_args=("test_loops", "threads_list", "repeats", "gen", "fmt", "out"),
 )
 
 if __name__ == "__main__":
