@@ -14,7 +14,10 @@
 use core::ffi::c_void;
 use fearless_simd::{Level, Simd, dispatch, f32x16, i32x16, prelude::*};
 
+mod pool;
 mod tiles;
+
+use pool::{SyncPtr, split};
 
 // ---------------------------------------------------------------------------------------------------------------
 // FFI structs (layout shared with fused.py's ctypes structures)
@@ -120,10 +123,7 @@ unsafe fn view_mat<'a>(m: &Mat) -> MatV<'a> {
                 W::I4(core::slice::from_raw_parts(p as *const u8, n / 2)),
                 nr * (cpad / 32),
             ),
-            _ => (
-                W::W8A8(core::slice::from_raw_parts(p as *const i8, n)),
-                2 * nr,
-            ),
+            _ => (W::W8A8(core::slice::from_raw_parts(p as *const i8, n)), 2 * nr),
         }
     };
     let s = if ns > 0 {
@@ -131,13 +131,7 @@ unsafe fn view_mat<'a>(m: &Mat) -> MatV<'a> {
     } else {
         &[][..]
     };
-    MatV {
-        rows,
-        cpad,
-        rpad,
-        w,
-        s,
-    }
+    MatV { rows, cpad, rpad, w, s }
 }
 
 /// # Safety
@@ -191,13 +185,7 @@ fn exp16<S: Simd>(y: f32x16<S>) -> f32x16<S> {
     let r = n.mul_add(-0.693_359_4, y);
     let r = n.mul_add(2.121_944_4e-4, r);
     let mut p = f32x16::splat(y.simd, 1.987_569_1e-4);
-    for c in [
-        1.398_199_9e-3,
-        8.333_452e-3,
-        4.166_579_6e-2,
-        0.166_666_65,
-        0.5,
-    ] {
+    for c in [1.398_199_9e-3, 8.333_452e-3, 4.166_579_6e-2, 0.166_666_65, 0.5] {
         p = p.mul_add(r, c);
     }
     let e = (p * r).mul_add(r, r) + 1.0;
@@ -278,10 +266,7 @@ fn get_row(m: &MatV, r: usize, out: &mut [f32]) {
             }
         }
         W::I4(w) => {
-            let (w, s) = (
-                &w[r * c / 2..(r + 1) * c / 2],
-                &m.s[r * (c / 32)..(r + 1) * (c / 32)],
-            );
+            let (w, s) = (&w[r * c / 2..(r + 1) * c / 2], &m.s[r * (c / 32)..(r + 1) * (c / 32)]);
             for g in 0..c / 32 {
                 for j in 0..16 {
                     let b = w[g * 16 + j];
@@ -322,14 +307,7 @@ pub(crate) fn f16_to_f32(h: u16) -> f32 {
 /// Per-token int8 activations (+128 -> u8), packed 4 per i32 word for vpdpbusd broadcasts; returns the scales.
 /// Written as lane-parallel loops (16 running maxima, a byte buffer) so they vectorize without fast-math.
 #[inline(always)]
-pub(crate) fn quant_act(
-    x: &[f32],
-    ldx: usize,
-    t: usize,
-    n: usize,
-    cpad: usize,
-    xw: &mut [i32],
-) -> Vec<f32> {
+pub(crate) fn quant_act(x: &[f32], ldx: usize, t: usize, n: usize, cpad: usize, xw: &mut [i32]) -> Vec<f32> {
     let c4 = cpad / 4;
     let mut ub = vec![128u8; cpad];
     (0..t)
@@ -345,18 +323,13 @@ pub(crate) fn quant_act(
             let amax = ch
                 .remainder()
                 .iter()
-                .fold(lanes.iter().fold(0f32, |a, &b| a.max(b)), |a, v| {
-                    a.max(v.abs())
-                });
+                .fold(lanes.iter().fold(0f32, |a, &b| a.max(b)), |a, v| a.max(v.abs()));
             let s = if amax > 0.0 { amax / 127.0 } else { 1.0 };
             let r = 1.0 / s;
             for (o, &v) in ub[..n].iter_mut().zip(row) {
                 *o = ((v * r).round_ties_even() as i32 + 128) as u8;
             }
-            for (w, b) in xw[ti * c4..(ti + 1) * c4]
-                .iter_mut()
-                .zip(ub.chunks_exact(4))
-            {
+            for (w, b) in xw[ti * c4..(ti + 1) * c4].iter_mut().zip(ub.chunks_exact(4)) {
                 *w = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
             }
             s
@@ -371,35 +344,9 @@ pub struct MatIn<'a> {
     pub cols: usize,
 }
 
-fn pool(nth: usize) -> &'static rayon::ThreadPool {
-    use std::sync::OnceLock;
-    static POOLS: OnceLock<std::sync::Mutex<Vec<(usize, &'static rayon::ThreadPool)>>> =
-        OnceLock::new();
-    let mut pools = POOLS.get_or_init(Default::default).lock().unwrap();
-    if let Some((_, p)) = pools.iter().find(|(n, _)| *n == nth) {
-        return p;
-    }
-    let p: &'static rayon::ThreadPool = Box::leak(Box::new(
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(nth)
-            .build()
-            .unwrap(),
-    ));
-    pools.push((nth, p));
-    p
-}
-
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn matmul<S: Simd>(
-    simd: S,
-    m: &MatV,
-    inp: MatIn,
-    y: &mut [f32],
-    ldy: usize,
-    acc: bool,
-    nth: usize,
-) {
+fn matmul<S: Simd>(simd: S, m: &MatV, inp: MatIn, y: &mut [f32], ldy: usize, acc: bool, nth: usize) {
     let level = simd.level();
     let ntile = m.rpad / 32;
     let c4 = m.cpad / 4;
@@ -410,23 +357,9 @@ fn matmul<S: Simd>(
     }
     let one = |tile: usize, t0: usize, buf: &mut [f32; 32 * tiles::NTB]| {
         let nt = (inp.t - t0).min(tiles::NTB);
-        let xq = if xw.is_empty() {
-            &xw[..]
-        } else {
-            &xw[t0 * c4..]
-        };
+        let xq = if xw.is_empty() { &xw[..] } else { &xw[t0 * c4..] };
         let xsq = if xs.is_empty() { &xs[..] } else { &xs[t0..] };
-        tiles::tile(
-            level,
-            m,
-            tile,
-            &inp.x[t0 * inp.ldx..],
-            inp.ldx,
-            xq,
-            xsq,
-            nt,
-            buf,
-        );
+        tiles::tile(level, m, tile, &inp.x[t0 * inp.ldx..], inp.ldx, xq, xsq, nt, buf);
     };
     let write = |y: &mut [f32], tile: usize, t0: usize, buf: &[f32]| {
         let r0 = tile * 32;
@@ -442,22 +375,33 @@ fn matmul<S: Simd>(
             }
         }
     };
-    if nth > 1 && inp.t > 1 {
-        use rayon::prelude::*;
-        let nblk = inp.t.div_ceil(tiles::NTB);
-        let res: Vec<[f32; 32 * tiles::NTB]> = pool(nth).install(|| {
-            (0..ntile * nblk)
-                .into_par_iter()
-                .map(|k| {
-                    let mut buf = [0f32; 32 * tiles::NTB];
-                    one(k / nblk, (k % nblk) * tiles::NTB, &mut buf);
-                    buf
-                })
-                .collect()
-        });
-        for (k, buf) in res.iter().enumerate() {
-            write(y, k / nblk, (k % nblk) * tiles::NTB, buf);
-        }
+    if nth > 1 {
+        // Thread tid always owns the same tiles (rows), so its share of the weights stays in its own L2.
+        let (yp, ylen) = (SyncPtr(y.as_mut_ptr()), y.len());
+        let job = |tid: usize| {
+            let (lo, hi) = split(ntile, nth, tid);
+            let mut buf = [0f32; 32 * tiles::NTB];
+            for tile in lo..hi {
+                for t0 in (0..inp.t).step_by(tiles::NTB) {
+                    one(tile, t0, &mut buf);
+                    let (r0, nt) = (tile * 32, (inp.t - t0).min(tiles::NTB));
+                    let nr = (m.rows - r0).min(32);
+                    for t in 0..nt {
+                        let base = (t0 + t) * ldy + r0;
+                        assert!(base + nr <= ylen);
+                        // Safety: rows r0..r0+nr belong to this tile, and tiles are split disjointly across threads.
+                        let dst = unsafe { core::slice::from_raw_parts_mut(yp.get().add(base), nr) };
+                        let src = &buf[t * 32..t * 32 + nr];
+                        if acc {
+                            dst.iter_mut().zip(src).for_each(|(a, b)| *a += b);
+                        } else {
+                            dst.copy_from_slice(src);
+                        }
+                    }
+                }
+            }
+        };
+        pool::get(nth).run(&job);
     } else {
         let mut buf = [0f32; 32 * tiles::NTB];
         for tile in 0..ntile {
@@ -488,6 +432,59 @@ pub struct Run<'a> {
     pub nth: usize,
 }
 
+/// One GDN head for one token: normalize q, k; gated delta-rule update of the head's state S (D x D, row-major);
+/// write o = RMSNorm(S^T q) * silu(gate).
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn head_step<S: Simd>(
+    simd: S,
+    qh: &mut [f32],
+    kh: &mut [f32],
+    vh: &[f32],
+    gt: &[f32],
+    (a, b): (f32, f32),
+    (neg_a, dt_bias): (f32, f32),
+    oh: &mut [f32],
+    sh: &mut [f32],
+    scratch: &mut [f32],
+    qs: f32,
+    eps: f32,
+) {
+    let dh = qh.len();
+    let (u, rest) = scratch.split_at_mut(dh);
+    let (wv, rest) = rest.split_at_mut(dh);
+    let gbuf = &mut rest[..dh];
+    l2n(qh, qs);
+    l2n(kh, 1.0);
+    let beta = 1.0 / (1.0 + (-b).exp());
+    let decay = (neg_a * softplus(a + dt_bias)).exp();
+    // u = S^T k, w = S^T q (read pass); delta = (v - decay u) beta; S <- decay S + k delta^T; o = decay w + (k.q) delta
+    u.fill(0.0);
+    wv.fill(0.0);
+    let mut kq = 0f32;
+    for (i, row) in sh.chunks_exact(dh).enumerate() {
+        let (ki, qi) = (kh[i], qh[i]);
+        kq += ki * qi;
+        for ((uj, wj), &sj) in u.iter_mut().zip(wv.iter_mut()).zip(row) {
+            *uj += sj * ki;
+            *wj += sj * qi;
+        }
+    }
+    for j in 0..dh {
+        u[j] = (vh[j] - decay * u[j]) * beta;
+        oh[j] = decay * wv[j] + kq * u[j];
+    }
+    for (i, row) in sh.chunks_exact_mut(dh).enumerate() {
+        let ki = kh[i];
+        for (sj, &uj) in row.iter_mut().zip(u.iter()) {
+            *sj = decay * *sj + ki * uj;
+        }
+    }
+    rms_inplace(oh, eps);
+    gbuf.copy_from_slice(oh);
+    silu_mul(simd, oh, gt, gbuf);
+}
+
 #[inline(always)]
 fn forward_impl<S: Simd>(simd: S, m: &ModelV, r: Run) {
     let (d, dp, h, dh, hid, hp, v) = (m.d, m.dp, m.h, m.dh, m.hid, m.hp, m.vocab);
@@ -500,29 +497,18 @@ fn forward_impl<S: Simd>(simd: S, m: &ModelV, r: Run) {
     let (ub, rest) = rest.split_at_mut(bt_max * 2 * hp);
     let (mb, _) = rest.split_at_mut(bt_max * hp);
     let qs = 1.0 / (dh as f32).sqrt();
-    let mut u = vec![0f32; dh];
-    let mut wv = vec![0f32; dh];
-    let mut gbuf = vec![0f32; dh];
+    let mut scratch = vec![0f32; 3 * dh];
     let tt = r.toks.len();
     let mut t0 = 0;
     while t0 < tt {
         let bt = (tt - t0).min(bt_max);
         for t in 0..bt {
-            get_row(
-                &m.emb,
-                r.toks[t0 + t] as usize,
-                &mut xb[t * dp..(t + 1) * dp],
-            );
+            get_row(&m.emb, r.toks[t0 + t] as usize, &mut xb[t * dp..(t + 1) * dp]);
         }
         for (l, ly) in m.layers.iter().enumerate() {
             let sl = &mut r.state[l * h * dh * dh..(l + 1) * h * dh * dh];
             for t in 0..bt {
-                rms(
-                    &xb[t * dp..(t + 1) * dp],
-                    &mut nb[t * dp..(t + 1) * dp],
-                    d,
-                    m.eps,
-                );
+                rms(&xb[t * dp..(t + 1) * dp], &mut nb[t * dp..(t + 1) * dp], d, m.eps);
             }
             matmul(
                 simd,
@@ -539,51 +525,81 @@ fn forward_impl<S: Simd>(simd: S, m: &ModelV, r: Run) {
                 r.nth,
             );
             for t in 0..bt {
-                let p = &mut pb[t * rin..(t + 1) * rin];
-                silu_inplace(simd, &mut p[..3 * d]);
-                let (qkv, rest) = p.split_at_mut(3 * d);
-                let (gt, ab) = rest.split_at(d);
-                let (q, kv) = qkv.split_at_mut(d);
-                let (k, vv) = kv.split_at_mut(d);
-                let o = &mut ob[t * dp..(t + 1) * dp];
-                for hh in 0..h {
-                    let qh = &mut q[hh * dh..(hh + 1) * dh];
-                    let kh = &mut k[hh * dh..(hh + 1) * dh];
-                    let vh = &vv[hh * dh..(hh + 1) * dh];
-                    let oh = &mut o[hh * dh..(hh + 1) * dh];
-                    let sh = &mut sl[hh * dh * dh..(hh + 1) * dh * dh];
-                    l2n(qh, qs);
-                    l2n(kh, 1.0);
-                    let beta = 1.0 / (1.0 + (-ab[h + hh]).exp());
-                    let decay = (ly.neg_a[hh] * softplus(ab[hh] + ly.dt_bias[hh])).exp();
-                    // u = S^T k, w = S^T q (read pass); delta = (v - decay u) beta;
-                    // S <- decay S + k delta^T; o = decay w + (k.q) delta
-                    u.fill(0.0);
-                    wv.fill(0.0);
-                    let mut kq = 0f32;
-                    for (i, row) in sh.chunks_exact(dh).enumerate() {
-                        let (ki, qi) = (kh[i], qh[i]);
-                        kq += ki * qi;
-                        for ((uj, wj), &sj) in u.iter_mut().zip(wv.iter_mut()).zip(row) {
-                            *uj += sj * ki;
-                            *wj += sj * qi;
-                        }
+                silu_inplace(simd, &mut pb[t * rin..t * rin + 3 * d]);
+            }
+            if r.nth > 1 && h > 1 {
+                // heads split across threads (each thread keeps its heads' state in its own cache)
+                let (pp, op, sp) = (
+                    SyncPtr(pb.as_mut_ptr()),
+                    SyncPtr(ob.as_mut_ptr()),
+                    SyncPtr(sl.as_mut_ptr()),
+                );
+                let (np, no, ns) = (pb.len(), ob.len(), sl.len());
+                let nth = r.nth.min(h);
+                let job = |tid: usize| {
+                    let (h0, h1) = split(h, nth, tid);
+                    if h0 == h1 {
+                        return;
                     }
-                    for j in 0..dh {
-                        u[j] = (vh[j] - decay * u[j]) * beta;
-                        oh[j] = decay * wv[j] + kq * u[j];
+                    simd.vectorize(
+                        #[inline(always)]
+                        || {
+                            let mut scratch = vec![0f32; 3 * dh];
+                            for t in 0..bt {
+                                for hh in h0..h1 {
+                                    let (pq, pk) = (t * rin + hh * dh, t * rin + d + hh * dh);
+                                    let (po, ps) = (t * dp + hh * dh, hh * dh * dh);
+                                    assert!(t * rin + rin <= np && po + dh <= no && ps + dh * dh <= ns);
+                                    // Safety: q, k, o and S ranges of head hh are disjoint from every other head's
+                                    // (heads are split disjointly across threads); v, gate, a, b are only read.
+                                    let (qh, kh, vh, gt, oh, sh, ab) = unsafe {
+                                        let p = pp.get();
+                                        (
+                                            core::slice::from_raw_parts_mut(p.add(pq), dh),
+                                            core::slice::from_raw_parts_mut(p.add(pk), dh),
+                                            core::slice::from_raw_parts(p.add(t * rin + 2 * d + hh * dh), dh),
+                                            core::slice::from_raw_parts(p.add(t * rin + 3 * d + hh * dh), dh),
+                                            core::slice::from_raw_parts_mut(op.get().add(po), dh),
+                                            core::slice::from_raw_parts_mut(sp.get().add(ps), dh * dh),
+                                            (*p.add(t * rin + 4 * d + hh), *p.add(t * rin + 4 * d + h + hh)),
+                                        )
+                                    };
+                                    let g = (ly.neg_a[hh], ly.dt_bias[hh]);
+                                    head_step(simd, qh, kh, vh, gt, ab, g, oh, sh, &mut scratch, qs, m.eps);
+                                }
+                            }
+                        },
+                    )
+                };
+                pool::get(r.nth).run(&job);
+            } else {
+                for t in 0..bt {
+                    let p = &mut pb[t * rin..(t + 1) * rin];
+                    let (qkv, rest) = p.split_at_mut(3 * d);
+                    let (gt, ab) = rest.split_at(d);
+                    let (q, kv) = qkv.split_at_mut(d);
+                    let (k, vv) = kv.split_at_mut(d);
+                    let o = &mut ob[t * dp..(t + 1) * dp];
+                    for hh in 0..h {
+                        head_step(
+                            simd,
+                            &mut q[hh * dh..(hh + 1) * dh],
+                            &mut k[hh * dh..(hh + 1) * dh],
+                            &vv[hh * dh..(hh + 1) * dh],
+                            &gt[hh * dh..(hh + 1) * dh],
+                            (ab[hh], ab[h + hh]),
+                            (ly.neg_a[hh], ly.dt_bias[hh]),
+                            &mut o[hh * dh..(hh + 1) * dh],
+                            &mut sl[hh * dh * dh..(hh + 1) * dh * dh],
+                            &mut scratch,
+                            qs,
+                            m.eps,
+                        );
                     }
-                    for (i, row) in sh.chunks_exact_mut(dh).enumerate() {
-                        let ki = kh[i];
-                        for (sj, &uj) in row.iter_mut().zip(u.iter()) {
-                            *sj = decay * *sj + ki * uj;
-                        }
-                    }
-                    rms_inplace(oh, m.eps);
-                    gbuf[..dh].copy_from_slice(oh);
-                    silu_mul(simd, oh, &gt[hh * dh..(hh + 1) * dh], &gbuf[..dh]);
                 }
-                o[d..].fill(0.0);
+            }
+            for t in 0..bt {
+                ob[t * dp + d..(t + 1) * dp].fill(0.0);
             }
             matmul(
                 simd,
@@ -600,12 +616,7 @@ fn forward_impl<S: Simd>(simd: S, m: &ModelV, r: Run) {
                 r.nth,
             );
             for t in 0..bt {
-                rms(
-                    &xb[t * dp..(t + 1) * dp],
-                    &mut nb[t * dp..(t + 1) * dp],
-                    d,
-                    m.eps,
-                );
+                rms(&xb[t * dp..(t + 1) * dp], &mut nb[t * dp..(t + 1) * dp], d, m.eps);
             }
             matmul(
                 simd,
@@ -644,12 +655,7 @@ fn forward_impl<S: Simd>(simd: S, m: &ModelV, r: Run) {
         }
         if r.all_logits {
             for t in 0..bt {
-                rms(
-                    &xb[t * dp..(t + 1) * dp],
-                    &mut nb[t * dp..(t + 1) * dp],
-                    d,
-                    m.eps,
-                );
+                rms(&xb[t * dp..(t + 1) * dp], &mut nb[t * dp..(t + 1) * dp], d, m.eps);
             }
             let inp = MatIn {
                 x: nb,
@@ -714,11 +720,7 @@ pub unsafe extern "C" fn forward(
     let mv = unsafe { view_model(&*m) };
     let (t, bt) = (t.max(0) as usize, bt.max(1) as usize);
     let ns = mv.layers.len() * mv.h * mv.dh * mv.dh;
-    let nl = if all_logits != 0 {
-        t * mv.vocab
-    } else {
-        mv.vocab
-    };
+    let nl = if all_logits != 0 { t * mv.vocab } else { mv.vocab };
     let nw = work_len(&mv, bt);
     let r = unsafe {
         Run {
@@ -735,7 +737,7 @@ pub unsafe extern "C" fn forward(
 }
 
 /// # Safety
-/// As `forward`; out[n].
+/// As `forward`; out[n]. nth: threads (1 = this thread only).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn generate(
     m: *const Model,
@@ -745,6 +747,7 @@ pub unsafe extern "C" fn generate(
     logits: *mut f32,
     work: *mut f32,
     out: *mut i32,
+    nth: i32,
 ) {
     let mv = unsafe { view_model(&*m) };
     let ns = mv.layers.len() * mv.h * mv.dh * mv.dh;
@@ -767,7 +770,7 @@ pub unsafe extern "C" fn generate(
             all_logits: false,
             work: &mut *work,
             bt: 1,
-            nth: 1,
+            nth: nth.max(1) as usize,
         };
         forward_safe(level, &mv, r);
         let best = logits
@@ -786,9 +789,7 @@ mod tests {
     #[test]
     fn exp16_matches_libm() {
         let level = Level::new();
-        let xs: Vec<f32> = (0..4096)
-            .map(|i| -80.0 + 160.0 * i as f32 / 4095.0)
-            .collect();
+        let xs: Vec<f32> = (0..4096).map(|i| -80.0 + 160.0 * i as f32 / 4095.0).collect();
         let mut worst = 0f32;
         dispatch!(level, simd => {
             for c in xs.chunks_exact(16) {

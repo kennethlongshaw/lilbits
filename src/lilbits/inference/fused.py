@@ -236,7 +236,7 @@ def _bind(lib: C.CDLL) -> C.CDLL:
         C.c_int,
         C.c_int,
     ]
-    lib.generate.argtypes = [m, C.c_int, C.c_int, fp(np.float32), fp(np.float32), fp(np.float32), fp(np.int32)]
+    lib.generate.argtypes = [m, C.c_int, C.c_int, fp(np.float32), fp(np.float32), fp(np.float32), fp(np.int32), C.c_int]
     lib.work_floats.argtypes = [m, C.c_int]
     lib.work_floats.restype = C.c_long
     return lib
@@ -324,5 +324,5 @@ class FusedLM:
         if n <= 1:
             return [first][:n]
         out = np.zeros(n - 1, np.int32)
-        self.lib.generate(C.byref(self.m), first, n - 1, self.S, self.logits, self.work, out)
+        self.lib.generate(C.byref(self.m), first, n - 1, self.S, self.logits, self.work, out, self.threads)
         return [first, *out.tolist()]

@@ -129,3 +129,30 @@ L2 is 2 MB per core (fast up to ~1.5 MB), L3 260 MB shared.
 - Same run with LL = 8 MB (the 4 cores' L2s together): 16 extra decode bytes add ~0 misses.
 So the next speedup is splitting the decode matmul rows across the 4 cores with persistent pinned threads, so each
 core keeps its 1.25 MB slice of the d200 weights in its own L2 (~110+ GB/s instead of 24).
+
+## Own thread pool (replaces rayon) and the per-core weight split
+`rust/lilbits_fused/src/pool.rs`: persistent workers, caller is thread 0, spin between phases and park after
+~0.1-0.2 ms idle. Work is split statically: thread i always owns the same 32-row weight tiles and the same GDN
+heads, so its weight slice stays in its own L2. Logits and greedy text are bit-identical for any thread count
+(`test_threads_match_one_thread`). Decode now uses the threads too (before, only prefill did).
+
+Best of 5, 256 decode bytes after a 512-byte prompt (W8A8):
+
+| model | threads | decode ms/B | decode CPU ms/B | prefill B/s |
+|---|---|---|---|---|
+| d200, 4 heads | 1 | 0.272 | 0.27 | 9,300 |
+| | 2 | 0.209 | 0.42 | 14,800 |
+| | 4 | 0.208 | 0.87 | 14,800 (rayon: 7,800) |
+| d512, 4 heads | 1 | 1.377 | 1.61 | 2,540 |
+| | 2 | 0.849 | 1.69 | 4,000 |
+| | 4 | 0.591 | 2.72 | 5,140 (rayon: 2,630) |
+
+- The matvec kernel reads weights at ~50-60 GB/s when they sit in L2 vs ~24 GB/s from L3 (microbenchmark; 4 pinned
+  copies at once each keep ~50 GB/s, so the vCPUs do have private L2s).
+- d512 decode gets 2.3x from 4 threads. d200 stops at ~1.3x: a decode byte is 41 parallel phases of ~1-5 us each,
+  and the caller's serial work between them (RMSNorm, activation quantization, SiLU) plus the hand-offs dominate.
+  Profile at 4 threads: 0.071 ms in the caller's share of the jobs, 0.053 ms waiting for workers, 0.081 ms serial.
+- Spinning workers cost CPU: at 4 threads CPU per byte is ~3x the 1-thread figure. threads=1 (default) is the
+  lowest CPU per byte; more threads trade CPU for latency.
+- Next step for small models: run the whole forward in lockstep on every thread (each computes the cheap
+  elementwise parts redundantly, one barrier per matmul) to remove the serial gaps.

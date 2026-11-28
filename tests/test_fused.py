@@ -50,3 +50,19 @@ def test_quantized_close(fmt):
     # KL(ref || out) per position stays small for every format
     kl = (np.exp(ref) * (ref - out)).sum(-1).mean()
     assert kl < {"f16": 1e-5, "i8": 1e-3, "w8a8": 2e-3, "i4": 2e-2}[fmt]
+
+
+@pytest.mark.parametrize("fmt", ["f32", "w8a8"])
+def test_threads_match_one_thread(fmt):
+    m = make(128, 4)
+    arrays = export(m, fmt)
+    x = torch.randint(0, 256, (100,)).numpy()
+    outs = []
+    for th in (1, 3, 4):
+        lm = FusedLM(arrays, block=16, threads=th)
+        logits = lm.logits_all(x[:60])
+        lm.reset()
+        lm.prefill(x[:60])
+        outs.append((logits, lm.generate(30)))
+    for logits, toks in outs[1:]:
+        assert np.array_equal(logits, outs[0][0]) and toks == outs[0][1]
