@@ -1,4 +1,4 @@
-# Sleep: examples 16 and 17
+# Sleep: examples 16 and 18
 
 ## Example 16: in-context adaptation via sleep (Lee et al. 2026, arXiv:2611.32802)
 
@@ -44,3 +44,40 @@ times as much compute per step (0.50 / 0.88 / 1.33 s). Decode gets slower than t
 explain, because this Python decode path spends overhead on the cache concatenations.
 
 Files: `16_train_N{1,2,4}.json` (training metrics), `16_test_corpus_20bpp.json`, `16_infer.json`.
+
+## Example 18: continual learning with sleep consolidation (Behrouz et al. 2026, arXiv:2606.03979)
+
+The model lives through 3 sessions of 6 new facts each, such as "Kalomi Tenvor's number is 4821.". While awake it
+writes them into fast memory, a rank-16 adapter on every MLP. Sleep unlocks a new rank-16 routed expert per block
+and seeds it from the fast-memory model (GKD on- and off-policy plus the LTI edit-distance reward, 200 steps). Then
+it dreams, selects dreams by gradient norm and runs SFT on them, and finally resets the fast memory
+(`models/sleep_consolidation.py`).
+
+**Setup.** The base is d = 64 with 4 layers (236,224 parameters), pretrained on 4.7 MB of the corpus mixed with
+sentences about random names: **20 bytes per parameter**. Recall is greedy and exact on all 4 digits, with no
+context and fast memory off.
+
+    uv run python examples/18_sleep_consolidation.py --d 64 --bytes-per-param 20 --wake-steps 300 \
+        --consolidate-steps 200 --dream-steps 60 --expert-rank 16 [--anchor 0]
+
+| | recall while awake (fast memory on) | recall of sessions 1 / 2 / 3 after all sessions | held-out bpb (base 2.622) |
+|---|---|---|---|
+| fast only (memory reset after each session) | 100% / 100% / 100% | 0 / 0 / 0 | 2.622 |
+| continual SFT (one slow adapter) | 100% / 100% / 100% | 0 / 0 / **100%** | 5.397 |
+| sleep (with anchor) | 100% / 100% / 100% | 0 / 0 / 0 | 3.484 |
+| sleep, no dreaming (with anchor) | 100% / 100% / 100% | 0 / 0 / 0 | **2.658** |
+| sleep, without anchor | 100% / 100% / 83% | 0 / 0 / 0 | 7.591 |
+| sleep, no dreaming, without anchor | 100% / 100% / 100% | 0 / 0 / 0 | 5.737 |
+
+**Read: consolidation does not work yet at this size.** Wake writes every fact into fast memory, and continual SFT
+shows the catastrophic forgetting the paper targets: it keeps only the last session. Sleep kept no exact numbers,
+not even right after its own session. Distilling into the new expert stalls at a KL of about 0.12 to 0.15 nats per
+byte. That gets the format right but not the 4 digits. The "anchor", which is an addition of ours and not in the
+paper, adds a KL to the pre-session model on general text. It is what keeps the base intact (2.66 bpb vs 5.74
+without it), while dreaming hurts the base (3.48). Slow memory costs 16.9 KB per session (3.6% of the base in
+FP16), and decode with 3 experts on runs about as fast as the base.
+
+Likely next steps: more seeding steps or a higher expert rank; dream prompts that end exactly at "number is "; or
+the paper's in-context teacher (the facts in context) in place of the fast adapter. One seed.
+
+Files: `18_anchor1.json`, `18_anchor0.json`.
