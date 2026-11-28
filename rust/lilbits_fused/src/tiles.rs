@@ -4,10 +4,12 @@
 //! fearless_simd's vector types) stream the tile's weights once, broadcast one activation per column and keep 32
 //! outputs per token in two zmm accumulators. Anything else runs the portable scalar tile.
 
+use crate::isa::Isa;
 use crate::{MatV, W, f16_to_f32};
 use fearless_simd::Level;
 
 pub const NTB: usize = 4;
+#[cfg(target_arch = "x86_64")]
 const PF_DIST: usize = 2048;
 
 #[cfg(target_arch = "x86_64")]
@@ -337,7 +339,7 @@ fn tile_scalar(m: &MatV, tile: usize, x: &[f32], ldx: usize, xw: &[i32], xs: &[f
                         let xu = ((xw[t * (c / 4) + i / 4] as u32 >> (8 * (i % 4))) & 255) as i32;
                         ia += w[tile * c * 32 + (i / 4) * 128 + j * 4 + i % 4] as i32 * (xu - 128);
                     }
-                    acc = ia as f32 * m.s[r] * xs[t];
+                    acc = ia as f32 * (m.s[r] * xs[t]); // same rounding as the SIMD kernels
                 }
             }
             buf[t * 32 + j] = acc;
@@ -359,56 +361,124 @@ pub fn tile(
     nt: usize,
     buf: &mut [f32],
 ) {
+    tile_isa(crate::isa::current(), level, m, tile, x, ldx, xw, xs, nt, buf)
+}
+
+/// `tile` with the kernel family given (`level` must be `isa::level(isa)`).
+#[allow(clippy::too_many_arguments)]
+pub fn tile_isa(
+    isa: Isa,
+    level: Level,
+    m: &MatV,
+    tile: usize,
+    x: &[f32],
+    ldx: usize,
+    xw: &[i32],
+    xs: &[f32],
+    nt: usize,
+    buf: &mut [f32],
+) {
     let c = m.cpad;
+    let _ = (isa, level);
+    // per-format slices of this tile
+    let (sc, corr) = match m.w {
+        W::W8A8(_) => (
+            &m.s[tile * 32..tile * 32 + 32],
+            &m.s[m.rpad + tile * 32..m.rpad + tile * 32 + 32],
+        ),
+        W::I8(_) => (&m.s[tile * 32..tile * 32 + 32], &[][..]),
+        W::I4(_) => (&m.s[tile * (c / 32) * 32..(tile + 1) * (c / 32) * 32], &[][..]),
+        _ => (&[][..], &[][..]),
+    };
+    let scale_rows = |buf: &mut [f32]| {
+        for t in 0..nt {
+            buf[t * 32..t * 32 + 32].iter_mut().zip(sc).for_each(|(o, s)| *o *= s);
+        }
+    };
     #[cfg(target_arch = "x86_64")]
-    if let Some(avx) = level.as_avx512() {
+    if let (Isa::Avx512, Some(avx)) = (isa, level.as_avx512()) {
         match m.w {
             W::F32(w) => avx512::tile_f32(avx, &w[tile * c * 32..(tile + 1) * c * 32], x, ldx, nt, buf),
             W::F16(w) => avx512::tile_f16(avx, &w[tile * c * 32..(tile + 1) * c * 32], x, ldx, nt, buf),
             W::I8(w) => {
                 avx512::tile_i8(avx, &w[tile * c * 32..(tile + 1) * c * 32], x, ldx, nt, buf);
-                let s = &m.s[tile * 32..tile * 32 + 32];
-                for t in 0..nt {
-                    buf[t * 32..t * 32 + 32].iter_mut().zip(s).for_each(|(o, s)| *o *= s);
-                }
+                scale_rows(buf);
             }
-            W::I4(w) => {
-                let st = &m.s[tile * (c / 32) * 32..(tile + 1) * (c / 32) * 32];
-                avx512::tile_i4(avx, &w[tile * c * 16..(tile + 1) * c * 16], st, x, ldx, nt, buf)
+            W::I4(w) => avx512::tile_i4(avx, &w[tile * c * 16..(tile + 1) * c * 16], sc, x, ldx, nt, buf),
+            W::W8A8(w) => avx512::tile_vnni(
+                avx,
+                &w[tile * c * 32..(tile + 1) * c * 32],
+                xw,
+                c / 4,
+                xs,
+                sc,
+                corr,
+                nt,
+                buf,
+            ),
+        }
+        return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if let (Isa::Avx2 | Isa::AvxVnni, Some(avx)) = (isa, level.as_avx2()) {
+        use crate::kern_avx2 as k;
+        match m.w {
+            W::F32(w) => k::tile_f32(avx, &w[tile * c * 32..(tile + 1) * c * 32], x, ldx, nt, buf),
+            W::F16(w) => k::tile_f16(avx, &w[tile * c * 32..(tile + 1) * c * 32], x, ldx, nt, buf),
+            W::I8(w) => {
+                k::tile_i8(avx, &w[tile * c * 32..(tile + 1) * c * 32], x, ldx, nt, buf);
+                scale_rows(buf);
             }
+            W::I4(w) => k::tile_i4(avx, &w[tile * c * 16..(tile + 1) * c * 16], sc, x, ldx, nt, buf),
             W::W8A8(w) => {
-                let (sc, corr) = (
-                    &m.s[tile * 32..tile * 32 + 32],
-                    &m.s[m.rpad + tile * 32..m.rpad + tile * 32 + 32],
-                );
-                avx512::tile_vnni(
-                    avx,
-                    &w[tile * c * 32..(tile + 1) * c * 32],
-                    xw,
-                    c / 4,
-                    xs,
-                    sc,
-                    corr,
-                    nt,
-                    buf,
-                )
+                let wt = &w[tile * c * 32..(tile + 1) * c * 32];
+                if isa == Isa::AvxVnni {
+                    // Safety: Isa::AvxVnni is only selected when AVX2 and AVX-VNNI were detected (isa::supported).
+                    unsafe { k::tile_vnni(wt, xw, c / 4, xs, sc, corr, nt, buf) }
+                } else {
+                    k::tile_w8a8(avx, wt, xw, c / 4, xs, sc, corr, nt, buf)
+                }
             }
         }
         return;
     }
+    #[cfg(target_arch = "aarch64")]
+    if let (Isa::Neon | Isa::NeonDot, Some(neon)) = (isa, level.as_neon()) {
+        use crate::kern_neon as k;
+        match m.w {
+            W::F32(w) => k::tile_f32(neon, &w[tile * c * 32..(tile + 1) * c * 32], x, ldx, nt, buf),
+            W::F16(w) => k::tile_f16(neon, &w[tile * c * 32..(tile + 1) * c * 32], x, ldx, nt, buf),
+            W::I8(w) => {
+                k::tile_i8(neon, &w[tile * c * 32..(tile + 1) * c * 32], x, ldx, nt, buf);
+                scale_rows(buf);
+            }
+            W::I4(w) => k::tile_i4(neon, &w[tile * c * 16..(tile + 1) * c * 16], sc, x, ldx, nt, buf),
+            W::W8A8(w) => {
+                let wt = &w[tile * c * 32..(tile + 1) * c * 32];
+                if isa == Isa::NeonDot {
+                    // Safety: Isa::NeonDot is only selected when dotprod was detected (isa::supported).
+                    unsafe { k::tile_sdot(wt, xw, c / 4, xs, sc, nt, buf) }
+                } else {
+                    k::tile_w8a8(neon, wt, xw, c / 4, xs, sc, nt, buf)
+                }
+            }
+        }
+        return;
+    }
+    let _ = (corr, scale_rows);
     tile_scalar(m, tile, x, ldx, xw, xs, nt, buf);
 }
 
 /// Quantize t token rows of W8A8 activations (see quant_row); portable fallback without AVX-512.
 pub fn quant(level: Level, x: &[f32], ldx: usize, t: usize, n: usize, cpad: usize, xw: &mut [i32]) -> Vec<f32> {
     #[cfg(target_arch = "x86_64")]
-    if let Some(avx) = level.as_avx512() {
+    if let (Isa::Avx512, Some(avx)) = (crate::isa::current(), level.as_avx512()) {
         let c4 = cpad / 4;
         return (0..t)
             .map(|ti| avx512::quant_row(avx, &x[ti * ldx..ti * ldx + n], &mut xw[ti * c4..(ti + 1) * c4]))
             .collect();
     }
-    crate::quant_act(x, ldx, t, n, cpad, xw)
+    crate::quant_simd(level, x, ldx, t, n, cpad, xw)
 }
 
 /// Decode (one token) W8A8 matvec over tiles lo..hi straight into y (= rows lo * 32 .. min(hi * 32, rows)).
@@ -425,7 +495,7 @@ pub fn matvec_w8a8(
     acc: bool,
 ) -> bool {
     #[cfg(target_arch = "x86_64")]
-    if let (Some(avx), W::W8A8(w)) = (level.as_avx512(), &m.w) {
+    if let (Isa::Avx512, Some(avx), W::W8A8(w)) = (crate::isa::current(), level.as_avx512(), &m.w) {
         let c = m.cpad;
         avx512::matvec_vnni(
             avx,
@@ -442,4 +512,214 @@ pub fn matvec_w8a8(
     }
     let _ = (level, m, lo, hi, xw, xs, y, acc);
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::isa::{self, ALL};
+
+    /// xorshift
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn f(&mut self) -> f32 {
+            (self.next() % 20001) as f32 / 10000.0 - 1.0
+        }
+    }
+
+    /// Every kernel family this CPU runs matches the scalar reference, for each format, token count and a
+    /// column count with an odd number of column pairs; W8A8 bit-exactly.
+    #[test]
+    fn kernels_match_scalar() {
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        let (ntile, cpad) = (3usize, 224usize);
+        let rpad = ntile * 32;
+        let n = rpad * cpad;
+        let f32w: Vec<f32> = (0..n).map(|_| rng.f()).collect();
+        let f16w: Vec<u16> = f32w.iter().map(|&v| half_bits(v)).collect();
+        let i8w: Vec<i8> = (0..n).map(|_| (rng.next() % 255) as i8).collect();
+        let i4w: Vec<u8> = (0..n / 2).map(|_| rng.next() as u8).collect();
+        let rows_s: Vec<f32> = (0..rpad).map(|_| 0.01 + rng.f().abs() * 0.02).collect();
+        let i4s: Vec<f32> = (0..rpad * cpad / 32).map(|_| 0.01 + rng.f().abs() * 0.02).collect();
+        // W8A8: scales then corr = 128 * row sum (as f32 bits), layout [tile][c / 4][32][4]
+        let mut w8s = rows_s.clone();
+        for r in 0..rpad {
+            let (tl, j) = (r / 32, r % 32);
+            let sum: i32 = (0..cpad)
+                .map(|i| i8w[tl * cpad * 32 + (i / 4) * 128 + j * 4 + i % 4] as i32)
+                .sum();
+            w8s.push(f32::from_bits((128 * sum) as u32));
+        }
+        let mats = [
+            (
+                "f32",
+                MatV {
+                    rows: 90,
+                    cpad,
+                    rpad,
+                    w: W::F32(&f32w),
+                    s: &[],
+                },
+            ),
+            (
+                "f16",
+                MatV {
+                    rows: 90,
+                    cpad,
+                    rpad,
+                    w: W::F16(&f16w),
+                    s: &[],
+                },
+            ),
+            (
+                "i8",
+                MatV {
+                    rows: 90,
+                    cpad,
+                    rpad,
+                    w: W::I8(&i8w),
+                    s: &rows_s,
+                },
+            ),
+            (
+                "i4",
+                MatV {
+                    rows: 90,
+                    cpad,
+                    rpad,
+                    w: W::I4(&i4w),
+                    s: &i4s,
+                },
+            ),
+            (
+                "w8a8",
+                MatV {
+                    rows: 90,
+                    cpad,
+                    rpad,
+                    w: W::W8A8(&i8w),
+                    s: &w8s,
+                },
+            ),
+        ];
+        let cols = 200;
+        let mut x = vec![0f32; NTB * cpad];
+        for t in 0..NTB {
+            for i in 0..cols {
+                x[t * cpad + i] = rng.f();
+            }
+        }
+        let mut xw = vec![0i32; NTB * cpad / 4];
+        let xs = crate::quant_act(&x, cpad, NTB, cols, cpad, &mut xw);
+        let mut tested = vec![];
+        for isa in ALL.into_iter().filter(|&i| isa::supported(i)) {
+            let level = isa::level(isa);
+            tested.push(isa);
+            for (name, m) in &mats {
+                for nt in 1..=NTB {
+                    for tl in 0..ntile {
+                        let (mut want, mut got) = ([0f32; 32 * NTB], [0f32; 32 * NTB]);
+                        tile_scalar(m, tl, &x, cpad, &xw, &xs, nt, &mut want);
+                        tile_isa(isa, level, m, tl, &x, cpad, &xw, &xs, nt, &mut got);
+                        for k in 0..nt * 32 {
+                            let (a, b) = (want[k], got[k]);
+                            let ok = if *name == "w8a8" {
+                                a.to_bits() == b.to_bits() // same integer sums, same final rounding
+                            } else {
+                                (a - b).abs() <= 1e-4 * a.abs().max(1.0)
+                            };
+                            assert!(ok, "{isa:?} {name} nt={nt} tile={tl} row={k}: {a} vs {b}");
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("kernel families tested: {tested:?}");
+    }
+
+    /// The W8A8 families agree bit for bit (the forward pass relies on this for identical output across CPUs).
+    #[test]
+    fn w8a8_families_bit_identical() {
+        let mut rng = Rng(12345);
+        let (cpad, rpad) = (544usize, 64usize);
+        let w: Vec<i8> = (0..rpad * cpad).map(|_| (rng.next() % 255) as i8).collect();
+        let mut s: Vec<f32> = (0..rpad).map(|_| 0.001 + rng.f().abs() * 0.01).collect();
+        for r in 0..rpad {
+            let (tl, j) = (r / 32, r % 32);
+            let sum: i32 = (0..cpad)
+                .map(|i| w[tl * cpad * 32 + (i / 4) * 128 + j * 4 + i % 4] as i32)
+                .sum();
+            s.push(f32::from_bits((128 * sum) as u32));
+        }
+        let m = MatV {
+            rows: rpad,
+            cpad,
+            rpad,
+            w: W::W8A8(&w),
+            s: &s,
+        };
+        let x: Vec<f32> = (0..NTB * cpad)
+            .map(|i| if i % cpad < 528 { rng.f() * 3.0 } else { 0.0 })
+            .collect();
+        let mut xw = vec![0i32; NTB * cpad / 4];
+        let xs = crate::quant_act(&x, cpad, NTB, 528, cpad, &mut xw);
+        let mut first: Option<(Isa, Vec<f32>)> = None;
+        for isa in ALL
+            .into_iter()
+            .filter(|&i| isa::supported(i) && i != Isa::Scalar && i != Isa::Sse)
+        {
+            let mut got = vec![0f32; 2 * 32 * NTB];
+            for tl in 0..2 {
+                tile_isa(
+                    isa,
+                    isa::level(isa),
+                    &m,
+                    tl,
+                    &x,
+                    cpad,
+                    &xw,
+                    &xs,
+                    NTB,
+                    &mut got[tl * 32 * NTB..],
+                );
+            }
+            match &first {
+                None => first = Some((isa, got)),
+                Some((i0, g0)) => assert!(g0 == &got, "{isa:?} differs from {i0:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn quant_paths_agree() {
+        let mut rng = Rng(7);
+        let (t, n, cpad) = (5usize, 203usize, 224usize);
+        let x: Vec<f32> = (0..t * cpad).map(|_| rng.f() * 4.0).collect();
+        let (mut a, mut b) = (vec![0i32; t * cpad / 4], vec![0i32; t * cpad / 4]);
+        let sa = crate::quant_act(&x, cpad, t, n, cpad, &mut a);
+        for isa in ALL.into_iter().filter(|&i| isa::supported(i)) {
+            let sb = quant(isa::level(isa), &x, cpad, t, n, cpad, &mut b);
+            assert!(sa == sb && a == b, "{isa:?}");
+        }
+    }
+
+    fn half_bits(v: f32) -> u16 {
+        // round-to-nearest f32 -> f16 for normal values in (-2, 2)
+        let b = v.to_bits();
+        let s = ((b >> 16) & 0x8000) as u16;
+        let e = ((b >> 23) & 255) as i32 - 127 + 15;
+        if e <= 0 {
+            return s;
+        }
+        let m = b & 0x7f_ffff;
+        let h = ((e as u32) << 10) | (m >> 13);
+        let h = h + (((m >> 12) & 1) & (((m & 0x1fff) != 0x1000) as u32 | (h & 1)));
+        s | h as u16
+    }
 }

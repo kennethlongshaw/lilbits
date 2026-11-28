@@ -3,7 +3,7 @@ import pytest
 import torch
 from torch import nn
 
-from lilbits.inference.fused import FusedLM, export
+from lilbits.inference.fused import FusedLM, available_simd, export, set_simd
 from lilbits.models.lean_lm import LeanLM
 
 
@@ -69,3 +69,33 @@ def test_threads_match_one_thread(fmt):
     for logits, toks, after in outs[1:]:
         assert np.array_equal(logits, outs[0][0]) and toks == outs[0][1]
         assert np.array_equal(after, outs[0][2])
+
+
+@pytest.mark.parametrize("family", available_simd())
+def test_every_kernel_family(family):
+    """Each kernel family this CPU runs (scalar fallback included): f32 matches torch, every format matches the
+    scalar reference (W8A8 bit-identically), and threads give identical decode output."""
+    m = make(160, 4)
+    x = torch.randint(0, 256, (1, 70))
+    with torch.no_grad():
+        ref = m(x)[0][0].numpy()
+    arrays = {f: export(m, f) for f in ("f32", "f16", "i8", "i4", "w8a8")}
+    try:
+        set_simd("scalar")
+        want = {f: FusedLM(a, block=16).logits_all(x[0].numpy()) for f, a in arrays.items()}
+        set_simd(family)
+        for f, a in arrays.items():
+            out = FusedLM(a, block=16).logits_all(x[0].numpy())
+            if f == "w8a8":
+                assert np.abs(out - want[f]).max() < 1e-4, f
+            else:
+                assert np.abs(out - want[f]).max() < 1e-4, f
+        assert np.abs(want["f32"] - ref).max() < 1e-4
+        gens = []
+        for th in (1, 3):
+            lm = FusedLM(arrays["w8a8"], threads=th)
+            lm.prefill(x[0].numpy())
+            gens.append(lm.generate(20))
+        assert gens[0] == gens[1]
+    finally:
+        set_simd("auto")

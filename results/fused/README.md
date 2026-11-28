@@ -185,3 +185,54 @@ Best of 5, 256 decode bytes after a 512-byte prompt (W8A8), previous engine → 
 - d200 decode is now 7,800 B/s at 3-4 threads (was ~4,700-5,400), and 4,500 B/s on one thread.
 - d512 is weight-bandwidth bound (28 MB per byte), so the kernel changes give less there; 4 threads still win 13%.
 - Prefill is unchanged (same blocked forward).
+
+## Kernels for other CPUs (AVX2, AVX-VNNI, NEON, scalar)
+The matmul kernels are picked at runtime (`rust/lilbits_fused/src/isa.rs`); the elementwise code follows through
+fearless_simd's matching level. `set_simd(name)` / `LILBITS_SIMD=name` forces one (tests, benchmarks).
+
+| family | CPUs | matmul kernels |
+|---|---|---|
+| avx512 | Ice Lake+ Xeon, Sapphire Rapids, Zen 4/5 | AVX-512 + VNNI (unchanged) |
+| avx-vnni | Alder / Raptor Lake (13900K), Arrow Lake, Zen 5 | AVX2 tiles; W8A8 on 256-bit vpdpbusd |
+| avx2 | Haswell+, Zen 1-3 | AVX2 + FMA tiles; W8A8 via vpmaddubsw (\|w\| x sign(x, w), never saturates) |
+| neon-dotprod | Apple M, Graviton 2+, Cortex-A76+, Snapdragon X | NEON tiles; W8A8 via sdot |
+| neon | older ARMv8 | NEON tiles; W8A8 via smull + sadalp |
+| sse4.2 / scalar | anything else | portable scalar matmul |
+
+- W8A8 matmuls give bit-identical integer sums and outputs on every family (signed-activation paths equal the
+  u8 paths minus the 128 x row-sum correction). Full-model logits agree with the scalar path to ~6e-6 (FMA in the
+  elementwise code); greedy text is identical across thread counts on each family.
+- Tests: `kernels_match_scalar` (every family, format, 1-4 tokens), `w8a8_families_bit_identical`,
+  `forward_all_families` (random model, every format, 1 and 3 threads), `quant_paths_agree` (Rust), and
+  `test_every_kernel_family` (Python, against PyTorch and the scalar path). ARM ran under qemu-user with
+  `-cpu max` (dotprod) and `-cpu cortex-a53` (no dotprod):
+
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER="qemu-aarch64 -L /usr/aarch64-linux-gnu -cpu max" \
+      cargo test --release --target aarch64-unknown-linux-gnu
+
+- Fixed on the way: prefill crashed when threads > GDN heads.
+- The non-AVX-512 activation quantization was a scalar loop and was the main AVX2 cost (decode 0.37 → 0.29 ms/B at
+  1 thread, prefill 4.7K → 7.9K B/s); it now uses fearless_simd vectors.
+
+W8A8, best of 5, measured on this Xeon (Sapphire Rapids class) with each family forced, so the AVX2 / AVX-VNNI rows
+are this core running those instructions, not a 13900K. Decode is mostly weight-bandwidth bound, so the narrower
+kernels lose less there than in prefill. ARM speed was not measured (emulated only).
+
+| model | threads | family | prefill B/s | decode ms/B |
+|---|---|---|---|---|
+| d200, 4 heads | 1 | avx2 | 7,900 | 0.291 |
+| | 1 | avx-vnni | 11,600 | 0.252 |
+| | 1 | avx512 | 14,400 | 0.240 |
+| | 4 | avx2 | 9,300 | 0.132 |
+| | 4 | avx-vnni | 12,500 | 0.169 |
+| | 4 | avx512 | 16,100 | 0.153 |
+| | 1 | sse4.2 (scalar matmul) | 130 | 6.98 |
+| d512, 4 heads | 1 | avx2 | 1,050 | 1.61 |
+| | 1 | avx-vnni | 1,610 | 1.56 |
+| | 1 | avx512 | 2,470 | 1.34 |
+| | 4 | avx2 | 2,590 | 0.639 |
+| | 4 | avx-vnni | 3,460 | 0.535 |
+| | 4 | avx512 | 4,660 | 0.517 |
+
+(4-thread d200 decode differences are within this VM's noise, ~±10%.)

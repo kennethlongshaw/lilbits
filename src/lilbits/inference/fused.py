@@ -14,8 +14,10 @@ PyTorch's path at these sizes).
     w8a8  int8 x per-token int8 activations, VNNI     fastest; +0.000 bpb at d200, +0.001 at d512
 
 `FusedLM(arrays)` runs it with numpy + ctypes only (torch is needed for `export`, not for inference), so a
-deployment process does not pay for the torch import. Fast path: AVX-512 (+VNNI for w8a8); other CPUs run the
-portable path (same results, slower matmuls). Batch 1. The engine is built with cargo on first use (cached by source
+deployment process does not pay for the torch import. Batch 1. Matmul kernels are picked at runtime: AVX-512 (+VNNI),
+AVX2 + AVX-VNNI (Alder / Raptor Lake), AVX2, NEON + sdot (Apple M, Graviton 2+), NEON, else portable scalar.
+W8A8 gives bit-identical results on all of them; the float formats agree to float rounding. `set_simd(name)` (or
+LILBITS_SIMD=name) forces one, for tests and benchmarks. The engine is built with cargo on first use (cached by source
 hash); LILBITS_FUSED_LIB=path loads a prebuilt library with the same C ABI instead.
 
     arrays = export(model, "w8a8"); np.savez("m.npz", **arrays)
@@ -37,6 +39,7 @@ import numpy as np
 _CRATE = Path(__file__).resolve().parents[3] / "rust" / "lilbits_fused"
 FMT = {"f32": 0, "f16": 1, "i8": 2, "i4": 3, "w8a8": 4}
 _lib: C.CDLL | None = None
+SIMD = {"auto": 0, "scalar": 1, "sse4.2": 2, "avx2": 3, "avx-vnni": 4, "avx512": 5, "neon": 6, "neon-dotprod": 7}
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -219,7 +222,31 @@ def load_kernel() -> C.CDLL:
         so.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(target / "release" / "liblilbits_fused.so", so)
     _lib = _bind(C.CDLL(str(so)))
+    if os.environ.get("LILBITS_SIMD"):
+        set_simd(os.environ["LILBITS_SIMD"])
     return _lib
+
+
+def set_simd(name: str) -> str:
+    """Force the kernel family (a key of SIMD; "auto" = best for this CPU), process-wide. Returns the one in use."""
+    got = load_kernel().set_simd(SIMD[name])
+    if got < 0:
+        raise ValueError(f"this CPU can't run the {name!r} kernels")
+    return simd()
+
+
+def simd() -> str:
+    """The kernel family in use."""
+    code = load_kernel().simd_isa()
+    return next(k for k, v in SIMD.items() if v == code)
+
+
+def available_simd() -> list[str]:
+    """Every kernel family this CPU can run (best last)."""
+    lib, cur = load_kernel(), load_kernel().simd_isa()
+    names = [k for k, v in SIMD.items() if v and lib.set_simd(v) >= 0]
+    lib.set_simd(cur)
+    return names
 
 
 def _bind(lib: C.CDLL) -> C.CDLL:
@@ -239,12 +266,16 @@ def _bind(lib: C.CDLL) -> C.CDLL:
     lib.generate.argtypes = [m, C.c_int, C.c_int, fp(np.float32), fp(np.float32), fp(np.float32), fp(np.int32), C.c_int]
     lib.work_floats.argtypes = [m, C.c_int]
     lib.work_floats.restype = C.c_long
+    lib.set_simd.argtypes = [C.c_int]
+    lib.set_simd.restype = C.c_int
+    lib.simd_isa.argtypes = []
+    lib.simd_isa.restype = C.c_int
     return lib
 
 
 def cpu_supported(fmt: str = "w8a8") -> bool:
-    """Whether the AVX-512 fast path runs (AVX-512F/BW/VL, +VNNI for w8a8) per Linux /proc/cpuinfo. Without it the
-    engine still works through its portable path."""
+    """Whether the AVX-512 path runs (AVX-512F/BW/VL, +VNNI for w8a8) per Linux /proc/cpuinfo. Other CPUs use
+    their own kernels (see `available_simd`)."""
     try:
         flags = Path("/proc/cpuinfo").read_text().split()
     except OSError:

@@ -1,19 +1,25 @@
 //! Fused CPU inference for lilbits' LeanLM (GDN byte LM with FP block linears, conv_size = 1).
 //!
-//! Loaded by `lilbits.inference.fused` through a C ABI (`forward`, `generate`, `work_floats`; it replaced the
-//! original C kernel with the same ABI and weight layouts), on arrays written by `lilbits.inference.fused.export`. SIMD goes through `fearless_simd`: the forward pass
-//! is generic over `Simd` and dispatched to the best level at runtime (so the elementwise code and the gated delta
-//! rule are compiled for AVX-512 / AVX2 / NEON / scalar), and the matmul tiles use AVX-512 intrinsics inside
-//! `fearless_simd::kernel!` (target features checked, loads from bounds-checked slices). Without AVX-512, a
-//! portable scalar matmul runs instead, so the library works on any CPU.
+//! Loaded by `lilbits.inference.fused` through a C ABI (`forward`, `generate`, `work_floats`, `set_simd`; it
+//! replaced the original C kernel with the same ABI and weight layouts), on arrays written by
+//! `lilbits.inference.fused.export`. SIMD goes through `fearless_simd`: the forward pass is generic over `Simd` and
+//! dispatched at runtime (so the elementwise code and the gated delta rule are compiled for AVX-512 / AVX2 / SSE4.2 /
+//! NEON / scalar). The matmul tiles have AVX-512 (+VNNI), AVX2 (+AVX-VNNI) and NEON (+sdot) kernels and a portable
+//! scalar one; `isa.rs` picks them per CPU.
 //!
 //! Weight formats: 0 f32, 1 f16, 2 int8 (per-row scale), 3 int4 (group 32), 4 int8 x int8 activations (VNNI).
 //! The embedding table is row-major (lookups); every other matrix is tile-major: [32-row tile][column][32]
-//! (W8A8: [tile][column / 4][32][4]). The only `unsafe` is turning the FFI pointers into slices.
+//! (W8A8: [tile][column / 4][32][4]). `unsafe` turns the FFI pointers into slices, splits shared buffers across
+//! threads, and calls the kernels whose CPU features `isa.rs` detected at runtime.
 
 use core::ffi::c_void;
 use fearless_simd::{Level, Simd, dispatch, f32x16, i32x16, prelude::*};
 
+mod isa;
+#[cfg(target_arch = "x86_64")]
+mod kern_avx2;
+#[cfg(target_arch = "aarch64")]
+mod kern_neon;
 mod pool;
 mod tiles;
 
@@ -320,8 +326,8 @@ pub(crate) fn f16_to_f32(h: u16) -> f32 {
 // ---------------------------------------------------------------------------------------------------------------
 
 /// Per-token int8 activations (+128 -> u8), packed 4 per i32 word for vpdpbusd broadcasts; returns the scales.
-/// Written as lane-parallel loops (16 running maxima, a byte buffer) so they vectorize without fast-math.
-#[inline(always)]
+/// Plain scalar reference for the SIMD versions (`quant_simd`, AVX-512 `tiles::quant_row`), used by the tests.
+#[cfg(test)]
 pub(crate) fn quant_act(x: &[f32], ldx: usize, t: usize, n: usize, cpad: usize, xw: &mut [i32]) -> Vec<f32> {
     let c4 = cpad / 4;
     let mut ub = vec![128u8; cpad];
@@ -350,6 +356,62 @@ pub(crate) fn quant_act(x: &[f32], ldx: usize, t: usize, n: usize, cpad: usize, 
             s
         })
         .collect()
+}
+
+/// `quant_act` for one row through fearless_simd vectors (AVX2 / SSE / NEON levels); same results.
+#[inline(always)]
+fn quant_row_simd<S: Simd>(simd: S, row: &[f32], out: &mut [i32]) -> f32 {
+    let mut m = f32x16::splat(simd, 0.0);
+    let mut ch = row.chunks_exact(16);
+    for c in &mut ch {
+        m = m.max(f32x16::from_slice(simd, c).abs());
+    }
+    let mut lanes = [0f32; 16];
+    m.store_slice(&mut lanes);
+    let amax = ch
+        .remainder()
+        .iter()
+        .fold(lanes.iter().fold(0f32, |a, &b| a.max(b)), |a, v| a.max(v.abs()));
+    let s = if amax > 0.0 { amax / 127.0 } else { 1.0 };
+    let r = 1.0 / s;
+    let (mut tmp, mut q) = ([0f32; 16], [0i32; 16]);
+    for (i, o) in out.chunks_exact_mut(4).enumerate() {
+        let base = i * 16;
+        let v = if base + 16 <= row.len() {
+            f32x16::from_slice(simd, &row[base..base + 16])
+        } else {
+            tmp.fill(0.0);
+            if base < row.len() {
+                tmp[..row.len() - base].copy_from_slice(&row[base..]);
+            }
+            f32x16::from_slice(simd, &tmp)
+        };
+        (i32x16::truncate_from((v * r).round_ties_even()) + 128).store_slice(&mut q);
+        for (j, w) in o.iter_mut().enumerate() {
+            *w = i32::from_le_bytes([
+                q[4 * j] as u8,
+                q[4 * j + 1] as u8,
+                q[4 * j + 2] as u8,
+                q[4 * j + 3] as u8,
+            ]);
+        }
+    }
+    s
+}
+
+pub(crate) fn quant_simd(
+    level: Level,
+    x: &[f32],
+    ldx: usize,
+    t: usize,
+    n: usize,
+    cpad: usize,
+    xw: &mut [i32],
+) -> Vec<f32> {
+    let c4 = cpad / 4;
+    dispatch!(level, simd => (0..t)
+        .map(|ti| quant_row_simd(simd, &x[ti * ldx..ti * ldx + n], &mut xw[ti * c4..(ti + 1) * c4]))
+        .collect())
 }
 
 pub struct MatIn<'a> {
@@ -568,6 +630,9 @@ fn forward_impl<S: Simd>(simd: S, m: &ModelV, r: Run) {
                 let (np, no, ns) = (pb.len(), ob.len(), sl.len());
                 let nth = r.nth.min(h);
                 let job = |tid: usize| {
+                    if tid >= nth {
+                        return; // more threads than heads
+                    }
                     let (h0, h1) = split(h, nth, tid);
                     if h0 == h1 {
                         return;
@@ -880,6 +945,20 @@ pub fn forward_safe(level: Level, m: &ModelV, r: Run) {
 // C ABI
 // ---------------------------------------------------------------------------------------------------------------
 
+/// Force the kernel family: 0 auto, 1 scalar, 2 SSE4.2, 3 AVX2, 4 AVX-VNNI, 5 AVX-512, 6 NEON, 7 NEON + dotprod.
+/// Returns the family now in use, or -1 (nothing changed) if this CPU can't run `code`. Process-wide; for tests and
+/// benchmarks.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_simd(code: i32) -> i32 {
+    isa::force_code(code)
+}
+
+/// The kernel family in use (codes as in `set_simd`).
+#[unsafe(no_mangle)]
+pub extern "C" fn simd_isa() -> i32 {
+    isa::current() as i32
+}
+
 /// # Safety
 /// `m` must come from `lilbits.inference.fused` (FusedLM builds it).
 #[unsafe(no_mangle)]
@@ -920,7 +999,7 @@ pub unsafe extern "C" fn forward(
             nth: nth.max(1) as usize,
         }
     };
-    forward_safe(Level::new(), &mv, r);
+    forward_safe(isa::level(isa::current()), &mv, r);
 }
 
 /// # Safety
@@ -947,7 +1026,7 @@ pub unsafe extern "C" fn generate(
             core::slice::from_raw_parts_mut(out, n.max(0) as usize),
         )
     };
-    let level = Level::new();
+    let level = isa::level(isa::current());
     if nth > 1 {
         let nth = nth as usize;
         dispatch!(level, simd => generate_lockstep(simd, &mv, first, out, state, logits, work, nth));
@@ -978,9 +1057,203 @@ pub unsafe extern "C" fn generate(
 mod tests {
     use super::*;
 
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn f(&mut self) -> f32 {
+            (self.next() % 20001) as f32 / 10000.0 - 1.0
+        }
+    }
+
+    /// Owned storage for one random matrix in format `fmt` (tile-major unless `row_major`).
+    struct OwnedMat {
+        w: Vec<u8>,
+        s: Vec<f32>,
+        m: Mat,
+    }
+
+    fn rand_mat(rng: &mut Rng, fmt: i32, rows: usize, cpad: usize, row_major: bool) -> OwnedMat {
+        let rpad = if row_major { 0 } else { rows.div_ceil(32) * 32 };
+        let nr = if row_major { rows } else { rpad };
+        let n = nr * cpad;
+        let amp = 1.0 / (cpad as f32).sqrt();
+        let (w, s): (Vec<u8>, Vec<f32>) = match fmt {
+            0 => (
+                (0..n).flat_map(|_| (rng.f() * amp * 1.7).to_le_bytes()).collect(),
+                vec![],
+            ),
+            1 => (
+                (0..n).flat_map(|_| half(rng.f() * amp * 1.7).to_le_bytes()).collect(),
+                vec![],
+            ),
+            2 => ((0..n).map(|_| rng.next() as u8 % 255).collect(), vec![amp * 0.014; nr]),
+            3 => (
+                (0..n / 2).map(|_| rng.next() as u8).collect(),
+                vec![amp * 0.2; nr * (cpad / 32)],
+            ),
+            _ => {
+                let w: Vec<u8> = (0..n).map(|_| (rng.next() % 255) as u8).collect();
+                let mut s = vec![amp * 0.014; nr];
+                for r in 0..nr {
+                    let sum: i32 = if row_major {
+                        (0..cpad).map(|i| w[r * cpad + i] as i8 as i32).sum()
+                    } else {
+                        let (tl, j) = (r / 32, r % 32);
+                        (0..cpad)
+                            .map(|i| w[tl * cpad * 32 + (i / 4) * 128 + j * 4 + i % 4] as i8 as i32)
+                            .sum()
+                    };
+                    s.push(f32::from_bits((128 * sum) as u32));
+                }
+                (w, s)
+            }
+        };
+        let mut o = OwnedMat {
+            w,
+            s,
+            m: Mat {
+                rows: rows as i32,
+                cols: cpad as i32,
+                cpad: cpad as i32,
+                fmt,
+                w: core::ptr::null(),
+                s: core::ptr::null(),
+                rpad: rpad as i32,
+            },
+        };
+        o.m.w = o.w.as_ptr() as *const c_void;
+        o.m.s = o.s.as_ptr();
+        o
+    }
+
+    fn half(v: f32) -> u16 {
+        let b = v.to_bits();
+        let s = ((b >> 16) & 0x8000) as u16;
+        let e = ((b >> 23) & 255) as i32 - 127 + 15;
+        if e <= 0 {
+            s
+        } else {
+            s | (((e as u32) << 10) | ((b & 0x7f_ffff) >> 13)) as u16
+        }
+    }
+
+    /// Runs a small random model (every weight format) through prefill + greedy decode under every kernel family
+    /// this CPU supports and 1 / 3 threads: logits agree with the scalar reference, and thread counts agree exactly.
+    #[test]
+    fn forward_all_families() {
+        let (d, h, hid, l, v) = (64usize, 2usize, 96usize, 2usize, 256usize);
+        let (dp, hp, dh) = (64usize, 96usize, d / h);
+        let rin = 4 * d + 2 * h;
+        for fmt in 0..5 {
+            let mut rng = Rng(0xDEAD_BEEF + fmt as u64);
+            let emb = rand_mat(&mut rng, fmt, v, dp, true);
+            let head = rand_mat(&mut rng, fmt, v, dp, false);
+            let mats: Vec<[OwnedMat; 4]> = (0..l)
+                .map(|_| {
+                    [
+                        rand_mat(&mut rng, fmt, rin, dp, false),
+                        rand_mat(&mut rng, fmt, d, dp, false),
+                        rand_mat(&mut rng, fmt, 2 * hid, dp, false),
+                        rand_mat(&mut rng, fmt, d, hp, false),
+                    ]
+                })
+                .collect();
+            let (neg_a, dtb): (Vec<f32>, Vec<f32>) = ((0..h).map(|_| -0.5).collect(), (0..h).map(|_| 0.1).collect());
+            let layers: Vec<Layer> = mats
+                .iter()
+                .map(|[a, b, c, e]| Layer {
+                    in_: Mat { ..a.m },
+                    o: Mat { ..b.m },
+                    up: Mat { ..c.m },
+                    down: Mat { ..e.m },
+                    neg_a: neg_a.as_ptr(),
+                    dt_bias: dtb.as_ptr(),
+                })
+                .collect();
+            let model = Model {
+                d: d as i32,
+                dpad: dp as i32,
+                h: h as i32,
+                dh: dh as i32,
+                hid: hid as i32,
+                hpad: hp as i32,
+                l: l as i32,
+                vocab: v as i32,
+                eps: 1e-6,
+                emb: Mat { ..emb.m },
+                head: Mat { ..head.m },
+                layers: layers.as_ptr(),
+            };
+            let toks: Vec<i32> = (0..21).map(|_| (rng.next() % 256) as i32).collect();
+            let run = |nth: i32| {
+                let mut state = vec![0f32; l * h * dh * dh];
+                let mut all = vec![0f32; toks.len() * v];
+                let mut logits = vec![0f32; v];
+                let mut work = vec![0f32; unsafe { work_floats(&model, 8) } as usize];
+                let mut out = vec![0i32; 12];
+                unsafe {
+                    let (sp, wp) = (state.as_mut_ptr(), work.as_mut_ptr());
+                    forward(
+                        &model,
+                        toks.as_ptr(),
+                        toks.len() as i32,
+                        sp,
+                        all.as_mut_ptr(),
+                        1,
+                        wp,
+                        8,
+                        nth,
+                    );
+                    state.fill(0.0);
+                    forward(
+                        &model,
+                        toks.as_ptr(),
+                        toks.len() as i32,
+                        sp,
+                        logits.as_mut_ptr(),
+                        0,
+                        wp,
+                        8,
+                        nth,
+                    );
+                    let first = (0..v).fold(0, |b, j| if logits[j] > logits[b] { j } else { b }) as i32;
+                    generate(&model, first, 12, sp, logits.as_mut_ptr(), wp, out.as_mut_ptr(), nth);
+                }
+                (all, out, logits)
+            };
+            let mut reference: Option<Vec<f32>> = None;
+            for isa_ in isa::ALL.into_iter().filter(|&i| isa::supported(i)) {
+                assert!(isa::force(Some(isa_)));
+                let (all1, out1, last1) = run(1);
+                let (all3, out3, last3) = run(3);
+                assert!(
+                    all1 == all3 && out1 == out3 && last1 == last3,
+                    "{isa_:?} fmt {fmt}: threads differ"
+                );
+                match &reference {
+                    None => reference = Some(all1),
+                    Some(r) => {
+                        let worst = r.iter().zip(&all1).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+                        let scale = r.iter().map(|a| a.abs()).fold(0f32, f32::max);
+                        assert!(
+                            worst <= 1e-3 * scale,
+                            "{isa_:?} fmt {fmt}: logits off by {worst} (max {scale})"
+                        );
+                    }
+                }
+            }
+            isa::force(None);
+        }
+    }
+
     #[test]
     fn exp16_matches_libm() {
-        let level = Level::new();
+        let level = isa::level(isa::current());
         let xs: Vec<f32> = (0..4096).map(|i| -80.0 + 160.0 * i as f32 / 4095.0).collect();
         let mut worst = 0f32;
         dispatch!(level, simd => {
@@ -997,7 +1270,7 @@ mod tests {
 
     #[test]
     fn silu_matches_scalar() {
-        let level = Level::new();
+        let level = isa::level(isa::current());
         let mut v: Vec<f32> = (0..103).map(|i| (i as f32 - 50.0) * 0.37).collect();
         let want: Vec<f32> = v.iter().map(|&x| silu(x)).collect();
         dispatch!(level, simd => silu_inplace(simd, &mut v));
