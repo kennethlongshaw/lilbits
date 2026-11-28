@@ -68,6 +68,7 @@ RUNS: list[tuple] = [
     ("13 operator loop vs attention loop: count", ["examples/13_operator_loop.py", "--task", "count"]),
     ("13 operator loop vs attention loop: who_said", ["examples/13_operator_loop.py", "--task", "who_said"]),
     ("13 operator loop vs attention loop: who_next", ["examples/13_operator_loop.py", "--task", "who_next"]),
+    ("16 sleep LM: N=1 / 2 / 4", ["examples/16_sleep_lm.py"]),
 ]
 METER_KEYS = ("wall_s", "cpu_s", "cpu_util", "peak_extra_mib")
 

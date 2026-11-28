@@ -147,3 +147,39 @@ class RecallSource:
     def sample(self, batch: int, two_hop_frac: float = 0.5) -> tuple[torch.Tensor, torch.Tensor]:
         kind = (torch.rand(batch, generator=self._g) < two_hop_frac).long()
         return torch.stack([self._one(bool(k)) for k in kind.tolist()]), kind
+
+
+class FewShotMapSource:
+    """Few-shot rule learning in context, as bytes: every sequence draws n_keys fresh letters and a random value
+    letter for each (an associative-recall map over 26 x 26 letters) and shows it one example at a time, so a value
+    can only be predicted from earlier examples of the same key.
+
+        "cKaFcKpBaF..."     keys 'a'.., values 'A'.., 2 bytes per example (key, then its value)
+
+    `sample` returns (tokens (B, L + 1), shots (B, L + 1)): shots[b, t] is how many times the key of the value at
+    t was already shown in that sequence (0 = first sight, unpredictable), -1 where t is not a value byte. The
+    value at t is predicted at its key (position t - 1), a one-hop induction lookup. Accuracy against shots is an
+    in-context learning curve.
+    """
+
+    vocab = 256
+
+    def __init__(self, n_keys: int = 16, seed: int = 0):
+        assert n_keys <= 26
+        self.n_keys = n_keys
+        self._g = torch.Generator().manual_seed(seed)
+
+    def sample(self, batch: int, seq_len: int) -> tuple[torch.Tensor, torch.Tensor]:
+        n_ex = (seq_len + 2) // 2
+        toks = torch.empty(batch, n_ex * 2, dtype=torch.long)
+        shots = torch.full((batch, n_ex * 2), -1, dtype=torch.long)
+        for b in range(batch):
+            names = torch.randperm(26, generator=self._g)[: self.n_keys]  # this sequence's keys and their values
+            vals = torch.randint(0, 26, (self.n_keys,), generator=self._g)
+            keys = torch.randint(0, self.n_keys, (n_ex,), generator=self._g)
+            seen = torch.zeros(self.n_keys, dtype=torch.long)
+            for j, k in enumerate(keys.tolist()):
+                toks[b, 2 * j], toks[b, 2 * j + 1] = ord("a") + names[k].item(), ord("A") + vals[k].item()
+                shots[b, 2 * j + 1] = seen[k]
+                seen[k] += 1
+        return toks[:, : seq_len + 1], shots[:, : seq_len + 1]
