@@ -172,6 +172,7 @@ unsafe fn view_model<'a>(m: &'a Model) -> ModelV<'a> {
 // ---------------------------------------------------------------------------------------------------------------
 
 #[inline(always)]
+#[cfg(test)]
 fn silu(x: f32) -> f32 {
     x / (1.0 + (-x).exp())
 }
@@ -201,7 +202,15 @@ fn silu_inplace<S: Simd>(simd: S, x: &mut [f32]) {
         let v = f32x16::from_slice(simd, c);
         (v / (exp16(-v) + 1.0)).store_slice(c);
     }
-    ch.into_remainder().iter_mut().for_each(|v| *v = silu(*v));
+    let r = ch.into_remainder();
+    if !r.is_empty() {
+        // the tail goes through the same exp16, so a value's result does not depend on where a slice starts
+        let mut t = [0f32; 16];
+        t[..r.len()].copy_from_slice(r);
+        let v = f32x16::from_slice(simd, &t);
+        (v / (exp16(-v) + 1.0)).store_slice(&mut t);
+        r.copy_from_slice(&t[..r.len()]);
+    }
 }
 
 /// out[i] = silu(a[i]) * b[i]
@@ -215,8 +224,14 @@ fn silu_mul<S: Simd>(simd: S, out: &mut [f32], a: &[f32], b: &[f32]) {
         );
         (va / (exp16(-va) + 1.0) * vb).store_slice(&mut out[i..i + 16]);
     }
-    for i in n..out.len() {
-        out[i] = silu(a[i]) * b[i];
+    let k = out.len() - n;
+    if k > 0 {
+        let (mut ta, mut tb) = ([0f32; 16], [0f32; 16]);
+        ta[..k].copy_from_slice(&a[n..n + k]);
+        tb[..k].copy_from_slice(&b[n..n + k]);
+        let (va, vb) = (f32x16::from_slice(simd, &ta), f32x16::from_slice(simd, &tb));
+        (va / (exp16(-va) + 1.0) * vb).store_slice(&mut ta);
+        out[n..].copy_from_slice(&ta[..k]);
     }
 }
 
@@ -375,11 +390,27 @@ fn matmul<S: Simd>(simd: S, m: &MatV, inp: MatIn, y: &mut [f32], ldy: usize, acc
             }
         }
     };
+    let fast = inp.t == 1 && matches!(m.w, W::W8A8(_));
+    if fast && nth <= 1 {
+        let yr = &mut y[..m.rows];
+        if tiles::matvec_w8a8(level, m, 0, ntile, &xw, xs[0], yr, acc) {
+            return;
+        }
+    }
     if nth > 1 {
         // Thread tid always owns the same tiles (rows), so its share of the weights stays in its own L2.
         let (yp, ylen) = (SyncPtr(y.as_mut_ptr()), y.len());
         let job = |tid: usize| {
             let (lo, hi) = split(ntile, nth, tid);
+            if fast && lo < hi {
+                let (r0, r1) = (lo * 32, (hi * 32).min(m.rows));
+                assert!(r1 <= ylen);
+                // Safety: rows r0..r1 belong to this thread's tiles, split disjointly across threads.
+                let yr = unsafe { core::slice::from_raw_parts_mut(yp.get().add(r0), r1 - r0) };
+                if tiles::matvec_w8a8(level, m, lo, hi, &xw, xs[0], yr, acc) {
+                    return;
+                }
+            }
             let mut buf = [0f32; 32 * tiles::NTB];
             for tile in lo..hi {
                 for t0 in (0..inp.t).step_by(tiles::NTB) {
@@ -685,6 +716,162 @@ fn forward_impl<S: Simd>(simd: S, m: &ModelV, r: Run) {
     }
 }
 
+/// One thread's rows of a decode matvec y (+)= W x: tiles split(ntile, nth, tid) of y (ylen floats, shared).
+/// x: the full (padded) input row, cols real columns; xw: scratch for the quantized activations.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn rows_mv<S: Simd>(
+    simd: S,
+    m: &MatV,
+    x: &[f32],
+    cols: usize,
+    xw: &mut [i32],
+    (tid, nth): (usize, usize),
+    (y, ylen): (SyncPtr<f32>, usize),
+    acc: bool,
+) {
+    let level = simd.level();
+    let (lo, hi) = split(m.rpad / 32, nth, tid);
+    if lo == hi {
+        return;
+    }
+    let (r0, r1) = (lo * 32, (hi * 32).min(m.rows));
+    assert!(r1 <= ylen);
+    // Safety: rows r0..r1 of y belong to this thread's tiles, which are split disjointly across the threads.
+    let yr = unsafe { core::slice::from_raw_parts_mut(y.get().add(r0), r1 - r0) };
+    let mut xs = [1f32];
+    let c4 = m.cpad / 4;
+    if let W::W8A8(_) = m.w {
+        xs[0] = tiles::quant(level, x, cols, 1, cols, m.cpad, &mut xw[..c4])[0];
+        if tiles::matvec_w8a8(level, m, lo, hi, &xw[..c4], xs[0], yr, acc) {
+            return;
+        }
+    }
+    let mut buf = [0f32; 32 * tiles::NTB];
+    for tile in lo..hi {
+        tiles::tile(level, m, tile, x, cols, &xw[..c4], &xs, 1, &mut buf);
+        let (a, n) = (tile * 32 - r0, (r1 - tile * 32).min(32));
+        let dst = &mut yr[a..a + n];
+        if acc {
+            dst.iter_mut().zip(&buf[..n]).for_each(|(o, b)| *o += b);
+        } else {
+            dst.copy_from_slice(&buf[..n]);
+        }
+    }
+}
+
+/// Greedy decode with nth threads in lockstep: one pool hand-off for the whole loop. Every thread runs the forward
+/// pass, redoes the cheap per-element steps (RMSNorm, activation quantization, SwiGLU, argmax) on private copies,
+/// computes its own rows of every matmul and its own GDN heads into shared buffers, and meets the others at a
+/// barrier after each phase (5 per layer, 1 per byte for the logits).
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn generate_lockstep<S: Simd>(
+    simd: S,
+    m: &ModelV,
+    first: i32,
+    out: &mut [i32],
+    state: &mut [f32],
+    logits: &mut [f32],
+    work: &mut [f32],
+    nth: usize,
+) {
+    let (d, dp, h, dh, hid, hp, v) = (m.d, m.dp, m.h, m.dh, m.hid, m.hp, m.vocab);
+    let rin = 4 * d + 2 * h;
+    let (xb, rest) = work.split_at_mut(dp);
+    let (_, rest) = rest.split_at_mut(dp);
+    let (pb, rest) = rest.split_at_mut(rin);
+    let (ob, rest) = rest.split_at_mut(dp);
+    let ub = &mut rest[..2 * hp];
+    ob.fill(0.0); // the padding columns stay zero
+    let (xp, pp, op, up) = (
+        SyncPtr(xb.as_mut_ptr()),
+        SyncPtr(pb.as_mut_ptr()),
+        SyncPtr(ob.as_mut_ptr()),
+        SyncPtr(ub.as_mut_ptr()),
+    );
+    let (sp, lp, outp) = (
+        SyncPtr(state.as_mut_ptr()),
+        SyncPtr(logits.as_mut_ptr()),
+        SyncPtr(out.as_mut_ptr()),
+    );
+    let (ns, nout) = (state.len(), out.len());
+    assert!(m.layers.len() * h * dh * dh <= ns && logits.len() >= v);
+    let qs = 1.0 / (dh as f32).sqrt();
+    let bar = pool::Barrier::new(nth);
+    // Shared views. Safety (all uses below): a phase only reads a buffer that no thread writes in that phase, or
+    // writes a part of it that no other thread touches in that phase; phases are separated by bar.wait().
+    let view = |p: SyncPtr<f32>, n: usize| unsafe { core::slice::from_raw_parts(p.get(), n) };
+    let job = |tid: usize| {
+        simd.vectorize(
+            #[inline(always)]
+            || {
+                let mut nb = vec![0f32; dp];
+                let mut mb = vec![0f32; hp];
+                let mut xw = vec![0i32; dp.max(hp) / 4 + 16];
+                let mut scratch = vec![0f32; 3 * dh];
+                let (h0, h1) = split(h, nth, tid);
+                let me = (tid, nth);
+                let mut tok = first as usize;
+                for i in 0..nout {
+                    if tid == 0 {
+                        get_row(&m.emb, tok, unsafe { core::slice::from_raw_parts_mut(xp.get(), dp) });
+                    }
+                    bar.wait();
+                    for (l, ly) in m.layers.iter().enumerate() {
+                        rms(view(xp, dp), &mut nb, d, m.eps);
+                        rows_mv(simd, &ly.inp, &nb, d, &mut xw, me, (pp, rin), false);
+                        bar.wait();
+                        for hh in h0..h1 {
+                            let (qh, kh, vh, gt, oh, sh, ab) = unsafe {
+                                let p = pp.get();
+                                let ps = (l * h + hh) * dh * dh;
+                                (
+                                    core::slice::from_raw_parts_mut(p.add(hh * dh), dh),
+                                    core::slice::from_raw_parts_mut(p.add(d + hh * dh), dh),
+                                    core::slice::from_raw_parts_mut(p.add(2 * d + hh * dh), dh),
+                                    core::slice::from_raw_parts(p.add(3 * d + hh * dh), dh),
+                                    core::slice::from_raw_parts_mut(op.get().add(hh * dh), dh),
+                                    core::slice::from_raw_parts_mut(sp.get().add(ps), dh * dh),
+                                    (*p.add(4 * d + hh), *p.add(4 * d + h + hh)),
+                                )
+                            };
+                            silu_inplace(simd, qh);
+                            silu_inplace(simd, kh);
+                            silu_inplace(simd, vh);
+                            let g = (ly.neg_a[hh], ly.dt_bias[hh]);
+                            head_step(simd, qh, kh, vh, gt, ab, g, oh, sh, &mut scratch, qs, m.eps);
+                        }
+                        bar.wait();
+                        rows_mv(simd, &ly.o, view(op, dp), d, &mut xw, me, (xp, dp), true);
+                        bar.wait();
+                        rms(view(xp, dp), &mut nb, d, m.eps);
+                        rows_mv(simd, &ly.up, &nb, d, &mut xw, me, (up, 2 * hp), false);
+                        bar.wait();
+                        let u = view(up, 2 * hp);
+                        silu_mul(simd, &mut mb[..hid], &u[..hid], &u[hid..2 * hid]);
+                        rows_mv(simd, &ly.down, &mb, hid, &mut xw, me, (xp, dp), true);
+                        bar.wait();
+                    }
+                    rms(view(xp, dp), &mut nb, d, m.eps);
+                    rows_mv(simd, &m.head, &nb, d, &mut xw, me, (lp, v), false);
+                    bar.wait();
+                    let lg = view(lp, v);
+                    tok = lg
+                        .iter()
+                        .enumerate()
+                        .fold(0, |b, (j, &x)| if x > lg[b] { j } else { b });
+                    if tid == 0 {
+                        unsafe { *outp.get().add(i) = tok as i32 };
+                    }
+                }
+            },
+        )
+    };
+    pool::get(nth).run(&job);
+    let _ = ns;
+}
+
 pub fn forward_safe(level: Level, m: &ModelV, r: Run) {
     dispatch!(level, simd => forward_impl(simd, m, r));
 }
@@ -761,6 +948,11 @@ pub unsafe extern "C" fn generate(
         )
     };
     let level = Level::new();
+    if nth > 1 {
+        let nth = nth as usize;
+        dispatch!(level, simd => generate_lockstep(simd, &mv, first, out, state, logits, work, nth));
+        return;
+    }
     let mut tok = [first];
     for o in out.iter_mut() {
         let r = Run {

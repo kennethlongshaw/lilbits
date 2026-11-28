@@ -154,5 +154,34 @@ Best of 5, 256 decode bytes after a 512-byte prompt (W8A8):
   Profile at 4 threads: 0.071 ms in the caller's share of the jobs, 0.053 ms waiting for workers, 0.081 ms serial.
 - Spinning workers cost CPU: at 4 threads CPU per byte is ~3x the 1-thread figure. threads=1 (default) is the
   lowest CPU per byte; more threads trade CPU for latency.
-- Next step for small models: run the whole forward in lockstep on every thread (each computes the cheap
-  elementwise parts redundantly, one barrier per matmul) to remove the serial gaps.
+- Superseded for decode by the lockstep path below.
+
+## Decode: range matvec kernel and lockstep threads
+Two changes, each kept only because it measured faster (A/B against the previous engine, interleaved rounds, best
+of 20; this VM's run-to-run noise is ~±8%):
+
+1. **Single thread**: a decode-only W8A8 matvec (`tiles::matvec_vnni`) runs over a whole range of row tiles in one
+   call and writes straight into the output (no per-tile buffer and copy), with 8 independent dpbusd chains and a
+   software prefetch 2 KB ahead. Hardware prefetch alone left the L3/DRAM weight stream ~5% slower.
+2. **Multi thread** (`generate_lockstep`): the whole greedy loop is one pool hand-off. Every thread runs the forward,
+   redoes the cheap per-element work (RMSNorm, activation quantization, SwiGLU, argmax) on private copies, computes
+   its own matmul rows and GDN heads into shared buffers, and meets the others at a spinning barrier: 5 per layer
+   plus 1 for the logits. That removes the serial gaps between phases. SiLU tails now go through the same SIMD exp
+   as the body, so results stay bit-identical for any thread count (test also checks the state after decode).
+
+Best of 5, 256 decode bytes after a 512-byte prompt (W8A8), previous engine → now:
+
+| model | threads | decode ms/B | decode CPU ms/B |
+|---|---|---|---|
+| d200, 4 heads | 1 | 0.278 → 0.221 | 0.28 → 0.22 |
+| | 2 | 0.228 → 0.146 | 0.47 → 0.34 |
+| | 3 | 0.186 → 0.127 | 0.64 → 0.39 |
+| | 4 | 0.212 → 0.129 | 0.87 → 0.54 |
+| d512, 4 heads | 1 | 1.326 → 1.296 | 1.50 → 1.48 |
+| | 2 | 0.912 → 0.809 | 1.84 → 1.79 |
+| | 3 | 0.676 → 0.612 | 2.24 → 1.83 |
+| | 4 | 0.589 → 0.506 | 2.59 → 2.95 |
+
+- d200 decode is now 7,800 B/s at 3-4 threads (was ~4,700-5,400), and 4,500 B/s on one thread.
+- d512 is weight-bandwidth bound (28 MB per byte), so the kernel changes give less there; 4 threads still win 13%.
+- Prefill is unchanged (same blocked forward).

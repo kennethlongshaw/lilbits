@@ -52,7 +52,7 @@ def test_quantized_close(fmt):
     assert kl < {"f16": 1e-5, "i8": 1e-3, "w8a8": 2e-3, "i4": 2e-2}[fmt]
 
 
-@pytest.mark.parametrize("fmt", ["f32", "w8a8"])
+@pytest.mark.parametrize("fmt", ["f32", "i4", "w8a8"])
 def test_threads_match_one_thread(fmt):
     m = make(128, 4)
     arrays = export(m, fmt)
@@ -63,6 +63,9 @@ def test_threads_match_one_thread(fmt):
         logits = lm.logits_all(x[:60])
         lm.reset()
         lm.prefill(x[:60])
-        outs.append((logits, lm.generate(30)))
-    for logits, toks in outs[1:]:
+        toks = lm.generate(30)
+        after = lm.prefill(x[60:]).copy()  # same recurrent state after decode
+        outs.append((logits, toks, after))
+    for logits, toks, after in outs[1:]:
         assert np.array_equal(logits, outs[0][0]) and toks == outs[0][1]
+        assert np.array_equal(after, outs[0][2])

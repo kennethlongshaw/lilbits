@@ -8,10 +8,11 @@ use crate::{MatV, W, f16_to_f32};
 use fearless_simd::Level;
 
 pub const NTB: usize = 4;
+const PF_DIST: usize = 2048;
 
 #[cfg(target_arch = "x86_64")]
 mod avx512 {
-    use super::NTB;
+    use super::{NTB, PF_DIST};
     use core::arch::x86_64::*;
     use fearless_simd::{Avx512, f32x16, i8x16, i8x64, prelude::*, u8x16, u16x16};
 
@@ -180,6 +181,87 @@ mod avx512 {
         }
     );
     fearless_simd::kernel!(
+        /// Decode W8A8 matvec over whole tiles: wt holds the range's tiles back to back, y gets 32 outputs per tile
+        /// (the last tile may be cut at y.len()). Four independent dpbusd chains per 16 rows, no per-tile buffer.
+        #[inline]
+        #[allow(clippy::too_many_arguments)]
+        pub fn matvec_vnni(
+            avx: Avx512,
+            wt: &[i8],
+            xw: &[i32],
+            c4: usize,
+            xs: f32,
+            sc: &[f32],
+            corr: &[f32],
+            y: &mut [f32],
+            acc: bool,
+        ) {
+            let xsv = _mm512_set1_ps(xs);
+            let xw = &xw[..c4];
+            for (ti, tw) in wt.chunks_exact(c4 * 128).enumerate() {
+                let z = _mm512_setzero_si512();
+                let (mut a0, mut a1, mut b0, mut b1) = (z, z, z, z);
+                let (mut c0, mut c1, mut d0, mut d1) = (z, z, z, z);
+                let mut q = tw.chunks_exact(512);
+                let mut xq = xw.chunks_exact(4);
+                for (p, x4) in (&mut q).zip(&mut xq) {
+                    // software prefetch ~2 KB ahead: hardware prefetch alone leaves the L3 / DRAM stream ~5% slower
+                    let pf = p.as_ptr().wrapping_add(PF_DIST);
+                    for l in 0..8 {
+                        _mm_prefetch::<_MM_HINT_T0>(pf.wrapping_add(64 * l));
+                    }
+                    let (xa, xb) = (_mm512_set1_epi32(x4[0]), _mm512_set1_epi32(x4[1]));
+                    let (xc, xd) = (_mm512_set1_epi32(x4[2]), _mm512_set1_epi32(x4[3]));
+                    a0 = _mm512_dpbusd_epi32(a0, xa, i8x64::from_slice(avx, &p[..64]).into());
+                    a1 = _mm512_dpbusd_epi32(a1, xa, i8x64::from_slice(avx, &p[64..128]).into());
+                    b0 = _mm512_dpbusd_epi32(b0, xb, i8x64::from_slice(avx, &p[128..192]).into());
+                    b1 = _mm512_dpbusd_epi32(b1, xb, i8x64::from_slice(avx, &p[192..256]).into());
+                    c0 = _mm512_dpbusd_epi32(c0, xc, i8x64::from_slice(avx, &p[256..320]).into());
+                    c1 = _mm512_dpbusd_epi32(c1, xc, i8x64::from_slice(avx, &p[320..384]).into());
+                    d0 = _mm512_dpbusd_epi32(d0, xd, i8x64::from_slice(avx, &p[384..448]).into());
+                    d1 = _mm512_dpbusd_epi32(d1, xd, i8x64::from_slice(avx, &p[448..]).into());
+                }
+                for (p, &x1) in q.remainder().chunks_exact(128).zip(xq.remainder()) {
+                    let xa = _mm512_set1_epi32(x1);
+                    a0 = _mm512_dpbusd_epi32(a0, xa, i8x64::from_slice(avx, &p[..64]).into());
+                    a1 = _mm512_dpbusd_epi32(a1, xa, i8x64::from_slice(avx, &p[64..]).into());
+                }
+                let s0 = _mm512_add_epi32(_mm512_add_epi32(a0, b0), _mm512_add_epi32(c0, d0));
+                let s1 = _mm512_add_epi32(_mm512_add_epi32(a1, b1), _mm512_add_epi32(c1, d1));
+                let r = ti * 32;
+                let k0 = _mm512_castps_si512(f32x16::from_slice(avx, &corr[r..r + 16]).into());
+                let k1 = _mm512_castps_si512(f32x16::from_slice(avx, &corr[r + 16..r + 32]).into());
+                let g0 = _mm512_mul_ps(f32x16::from_slice(avx, &sc[r..r + 16]).into(), xsv);
+                let g1 = _mm512_mul_ps(f32x16::from_slice(avx, &sc[r + 16..r + 32]).into(), xsv);
+                let o0 = _mm512_mul_ps(_mm512_cvtepi32_ps(_mm512_sub_epi32(s0, k0)), g0);
+                let o1 = _mm512_mul_ps(_mm512_cvtepi32_ps(_mm512_sub_epi32(s1, k1)), g1);
+                let (lo, hi): (f32x16<Avx512>, f32x16<Avx512>) = (o0.simd_into(avx), o1.simd_into(avx));
+                if r + 32 <= y.len() {
+                    let dst = &mut y[r..r + 32];
+                    if acc {
+                        let (l, h) = dst.split_at_mut(16);
+                        (f32x16::from_slice(avx, l) + lo).store_slice(l);
+                        (f32x16::from_slice(avx, h) + hi).store_slice(h);
+                    } else {
+                        lo.store_slice(&mut dst[..16]);
+                        hi.store_slice(&mut dst[16..]);
+                    }
+                } else {
+                    let mut buf = [0f32; 32];
+                    lo.store_slice(&mut buf[..16]);
+                    hi.store_slice(&mut buf[16..]);
+                    let n = y.len() - r;
+                    let dst = &mut y[r..];
+                    if acc {
+                        dst.iter_mut().zip(&buf[..n]).for_each(|(a, b)| *a += b);
+                    } else {
+                        dst.copy_from_slice(&buf[..n]);
+                    }
+                }
+            }
+        }
+    );
+    fearless_simd::kernel!(
         /// One token's int8 activations for W8A8: absmax scale, round to nearest even, +128, 4 bytes per i32 word.
         /// row: n floats; out: cpad / 4 words (columns past n are 0.0, i.e. the zero point 128). Returns the scale.
         #[inline]
@@ -327,4 +409,37 @@ pub fn quant(level: Level, x: &[f32], ldx: usize, t: usize, n: usize, cpad: usiz
             .collect();
     }
     crate::quant_act(x, ldx, t, n, cpad, xw)
+}
+
+/// Decode (one token) W8A8 matvec over tiles lo..hi straight into y (= rows lo * 32 .. min(hi * 32, rows)).
+/// Returns false when there is no AVX-512 path (the caller then uses the tile loop).
+#[allow(clippy::too_many_arguments)]
+pub fn matvec_w8a8(
+    level: Level,
+    m: &MatV,
+    lo: usize,
+    hi: usize,
+    xw: &[i32],
+    xs: f32,
+    y: &mut [f32],
+    acc: bool,
+) -> bool {
+    #[cfg(target_arch = "x86_64")]
+    if let (Some(avx), W::W8A8(w)) = (level.as_avx512(), &m.w) {
+        let c = m.cpad;
+        avx512::matvec_vnni(
+            avx,
+            &w[lo * c * 32..hi * c * 32],
+            xw,
+            c / 4,
+            xs,
+            &m.s[lo * 32..hi * 32],
+            &m.s[m.rpad + lo * 32..m.rpad + hi * 32],
+            y,
+            acc,
+        );
+        return true;
+    }
+    let _ = (level, m, lo, hi, xw, xs, y, acc);
+    false
 }

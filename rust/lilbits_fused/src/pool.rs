@@ -169,3 +169,42 @@ impl<T> SyncPtr<T> {
         self.0
     }
 }
+
+/// A spinning barrier for the n threads of one `run` (lockstep decode: ~40 phases per token, microseconds each).
+pub struct Barrier {
+    n: usize,
+    count: AtomicUsize,
+    generation: AtomicUsize,
+}
+
+impl Barrier {
+    pub fn new(n: usize) -> Barrier {
+        Barrier {
+            n,
+            count: AtomicUsize::new(0),
+            generation: AtomicUsize::new(0),
+        }
+    }
+
+    /// Returns once all n threads have called wait (everything written before it is visible after it).
+    pub fn wait(&self) {
+        if self.n <= 1 {
+            return;
+        }
+        let g = self.generation.load(Acquire);
+        if self.count.fetch_add(1, AcqRel) == self.n - 1 {
+            self.count.store(0, Relaxed);
+            self.generation.store(g.wrapping_add(1), Release);
+        } else {
+            let mut spins = 0u32;
+            while self.generation.load(Acquire) == g {
+                spins = spins.saturating_add(1);
+                if spins < 1 << 16 {
+                    core::hint::spin_loop();
+                } else {
+                    thread::yield_now(); // oversubscribed: let the missing thread run
+                }
+            }
+        }
+    }
+}
