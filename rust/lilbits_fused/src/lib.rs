@@ -7,6 +7,9 @@
 //! NEON / scalar). The matmul tiles have AVX-512 (+VNNI), AVX2 (+AVX-VNNI) and NEON (+sdot) kernels and a portable
 //! scalar one; `isa.rs` picks them per CPU.
 //!
+//! `hnet.rs` chains three GDN stacks into the space-patched H-Net (`hnet_forward`, `hnet_generate`), `bundle.rs` loads
+//! a one-file `.lbm` bundle for the standalone CLI (`src/bin/lilbits.rs`), which runs either model without Python.
+//!
 //! Weight formats: 0 f32, 1 f16, 2 int8 (per-row scale), 3 int4 (group 32), 4 int8 x int8 activations (VNNI).
 //! The embedding table is row-major (lookups); every other matrix is tile-major: [32-row tile][column][32]
 //! (W8A8: [tile][column / 4][32][4]). `unsafe` turns the FFI pointers into slices, splits shared buffers across
@@ -15,6 +18,8 @@
 use core::ffi::c_void;
 use fearless_simd::{Level, Simd, dispatch, f32x16, i32x16, prelude::*};
 
+pub mod bundle;
+mod hnet;
 mod isa;
 #[cfg(target_arch = "x86_64")]
 mod kern_avx2;
@@ -578,12 +583,23 @@ fn head_step<S: Simd>(
     silu_mul(simd, oh, gt, gbuf);
 }
 
+/// The GDN layers of `m` on bt rows of the residual stream xb (row stride dp), in place, carrying `state`
+/// (L*H*D*D). `rest` is the rest of the work buffer after xb (work_len(bt_max) - bt_max * dp floats). Embedding
+/// and head are the caller's: `forward_impl` wraps this for token models, `hnet` chains three stacks.
 #[inline(always)]
-fn forward_impl<S: Simd>(simd: S, m: &ModelV, r: Run) {
-    let (d, dp, h, dh, hid, hp, v) = (m.d, m.dp, m.h, m.dh, m.hid, m.hp, m.vocab);
+#[allow(clippy::too_many_arguments)]
+fn stack_impl<S: Simd>(
+    simd: S,
+    m: &ModelV,
+    xb: &mut [f32],
+    rest: &mut [f32],
+    bt_max: usize,
+    bt: usize,
+    state: &mut [f32],
+    nth: usize,
+) {
+    let (d, dp, h, dh, hid, hp) = (m.d, m.dp, m.h, m.dh, m.hid, m.hp);
     let rin = 4 * d + 2 * h;
-    let bt_max = r.bt;
-    let (xb, rest) = r.work.split_at_mut(bt_max * dp);
     let (nb, rest) = rest.split_at_mut(bt_max * dp);
     let (pb, rest) = rest.split_at_mut(bt_max * rin);
     let (ob, rest) = rest.split_at_mut(bt_max * dp);
@@ -591,6 +607,164 @@ fn forward_impl<S: Simd>(simd: S, m: &ModelV, r: Run) {
     let (mb, _) = rest.split_at_mut(bt_max * hp);
     let qs = 1.0 / (dh as f32).sqrt();
     let mut scratch = vec![0f32; 3 * dh];
+    for (l, ly) in m.layers.iter().enumerate() {
+        let sl = &mut state[l * h * dh * dh..(l + 1) * h * dh * dh];
+        for t in 0..bt {
+            rms(&xb[t * dp..(t + 1) * dp], &mut nb[t * dp..(t + 1) * dp], d, m.eps);
+        }
+        matmul(
+            simd,
+            &ly.inp,
+            MatIn {
+                x: nb,
+                ldx: dp,
+                t: bt,
+                cols: d,
+            },
+            pb,
+            rin,
+            false,
+            nth,
+        );
+        for t in 0..bt {
+            silu_inplace(simd, &mut pb[t * rin..t * rin + 3 * d]);
+        }
+        if nth > 1 && h > 1 {
+            // heads split across threads (each thread keeps its heads' state in its own cache)
+            let (pp, op, sp) = (
+                SyncPtr(pb.as_mut_ptr()),
+                SyncPtr(ob.as_mut_ptr()),
+                SyncPtr(sl.as_mut_ptr()),
+            );
+            let (np, no, ns) = (pb.len(), ob.len(), sl.len());
+            let nth = nth.min(h);
+            let job = |tid: usize| {
+                if tid >= nth {
+                    return; // more threads than heads
+                }
+                let (h0, h1) = split(h, nth, tid);
+                if h0 == h1 {
+                    return;
+                }
+                simd.vectorize(
+                    #[inline(always)]
+                    || {
+                        let mut scratch = vec![0f32; 3 * dh];
+                        for t in 0..bt {
+                            for hh in h0..h1 {
+                                let (pq, pk) = (t * rin + hh * dh, t * rin + d + hh * dh);
+                                let (po, ps) = (t * dp + hh * dh, hh * dh * dh);
+                                assert!(t * rin + rin <= np && po + dh <= no && ps + dh * dh <= ns);
+                                // Safety: q, k, o and S ranges of head hh are disjoint from every other head's
+                                // (heads are split disjointly across threads); v, gate, a, b are only read.
+                                let (qh, kh, vh, gt, oh, sh, ab) = unsafe {
+                                    let p = pp.get();
+                                    (
+                                        core::slice::from_raw_parts_mut(p.add(pq), dh),
+                                        core::slice::from_raw_parts_mut(p.add(pk), dh),
+                                        core::slice::from_raw_parts(p.add(t * rin + 2 * d + hh * dh), dh),
+                                        core::slice::from_raw_parts(p.add(t * rin + 3 * d + hh * dh), dh),
+                                        core::slice::from_raw_parts_mut(op.get().add(po), dh),
+                                        core::slice::from_raw_parts_mut(sp.get().add(ps), dh * dh),
+                                        (*p.add(t * rin + 4 * d + hh), *p.add(t * rin + 4 * d + h + hh)),
+                                    )
+                                };
+                                let g = (ly.neg_a[hh], ly.dt_bias[hh]);
+                                head_step(simd, qh, kh, vh, gt, ab, g, oh, sh, &mut scratch, qs, m.eps);
+                            }
+                        }
+                    },
+                )
+            };
+            pool::get(nth).run(&job);
+        } else {
+            for t in 0..bt {
+                let p = &mut pb[t * rin..(t + 1) * rin];
+                let (qkv, rest) = p.split_at_mut(3 * d);
+                let (gt, ab) = rest.split_at(d);
+                let (q, kv) = qkv.split_at_mut(d);
+                let (k, vv) = kv.split_at_mut(d);
+                let o = &mut ob[t * dp..(t + 1) * dp];
+                for hh in 0..h {
+                    head_step(
+                        simd,
+                        &mut q[hh * dh..(hh + 1) * dh],
+                        &mut k[hh * dh..(hh + 1) * dh],
+                        &vv[hh * dh..(hh + 1) * dh],
+                        &gt[hh * dh..(hh + 1) * dh],
+                        (ab[hh], ab[h + hh]),
+                        (ly.neg_a[hh], ly.dt_bias[hh]),
+                        &mut o[hh * dh..(hh + 1) * dh],
+                        &mut sl[hh * dh * dh..(hh + 1) * dh * dh],
+                        &mut scratch,
+                        qs,
+                        m.eps,
+                    );
+                }
+            }
+        }
+        for t in 0..bt {
+            ob[t * dp + d..(t + 1) * dp].fill(0.0);
+        }
+        matmul(
+            simd,
+            &ly.o,
+            MatIn {
+                x: ob,
+                ldx: dp,
+                t: bt,
+                cols: d,
+            },
+            xb,
+            dp,
+            true,
+            nth,
+        );
+        for t in 0..bt {
+            rms(&xb[t * dp..(t + 1) * dp], &mut nb[t * dp..(t + 1) * dp], d, m.eps);
+        }
+        matmul(
+            simd,
+            &ly.up,
+            MatIn {
+                x: nb,
+                ldx: dp,
+                t: bt,
+                cols: d,
+            },
+            ub,
+            2 * hp,
+            false,
+            nth,
+        );
+        for t in 0..bt {
+            let uu = &ub[t * 2 * hp..(t + 1) * 2 * hp];
+            let mh = &mut mb[t * hp..(t + 1) * hp];
+            silu_mul(simd, &mut mh[..hid], &uu[..hid], &uu[hid..2 * hid]);
+            mh[hid..].fill(0.0);
+        }
+        matmul(
+            simd,
+            &ly.down,
+            MatIn {
+                x: mb,
+                ldx: hp,
+                t: bt,
+                cols: hid,
+            },
+            xb,
+            dp,
+            true,
+            nth,
+        );
+    }
+}
+
+#[inline(always)]
+fn forward_impl<S: Simd>(simd: S, m: &ModelV, r: Run) {
+    let (d, dp, v) = (m.d, m.dp, m.vocab);
+    let bt_max = r.bt;
+    let (xb, rest) = r.work.split_at_mut(bt_max * dp);
     let tt = r.toks.len();
     let mut t0 = 0;
     while t0 < tt {
@@ -598,157 +772,8 @@ fn forward_impl<S: Simd>(simd: S, m: &ModelV, r: Run) {
         for t in 0..bt {
             get_row(&m.emb, r.toks[t0 + t] as usize, &mut xb[t * dp..(t + 1) * dp]);
         }
-        for (l, ly) in m.layers.iter().enumerate() {
-            let sl = &mut r.state[l * h * dh * dh..(l + 1) * h * dh * dh];
-            for t in 0..bt {
-                rms(&xb[t * dp..(t + 1) * dp], &mut nb[t * dp..(t + 1) * dp], d, m.eps);
-            }
-            matmul(
-                simd,
-                &ly.inp,
-                MatIn {
-                    x: nb,
-                    ldx: dp,
-                    t: bt,
-                    cols: d,
-                },
-                pb,
-                rin,
-                false,
-                r.nth,
-            );
-            for t in 0..bt {
-                silu_inplace(simd, &mut pb[t * rin..t * rin + 3 * d]);
-            }
-            if r.nth > 1 && h > 1 {
-                // heads split across threads (each thread keeps its heads' state in its own cache)
-                let (pp, op, sp) = (
-                    SyncPtr(pb.as_mut_ptr()),
-                    SyncPtr(ob.as_mut_ptr()),
-                    SyncPtr(sl.as_mut_ptr()),
-                );
-                let (np, no, ns) = (pb.len(), ob.len(), sl.len());
-                let nth = r.nth.min(h);
-                let job = |tid: usize| {
-                    if tid >= nth {
-                        return; // more threads than heads
-                    }
-                    let (h0, h1) = split(h, nth, tid);
-                    if h0 == h1 {
-                        return;
-                    }
-                    simd.vectorize(
-                        #[inline(always)]
-                        || {
-                            let mut scratch = vec![0f32; 3 * dh];
-                            for t in 0..bt {
-                                for hh in h0..h1 {
-                                    let (pq, pk) = (t * rin + hh * dh, t * rin + d + hh * dh);
-                                    let (po, ps) = (t * dp + hh * dh, hh * dh * dh);
-                                    assert!(t * rin + rin <= np && po + dh <= no && ps + dh * dh <= ns);
-                                    // Safety: q, k, o and S ranges of head hh are disjoint from every other head's
-                                    // (heads are split disjointly across threads); v, gate, a, b are only read.
-                                    let (qh, kh, vh, gt, oh, sh, ab) = unsafe {
-                                        let p = pp.get();
-                                        (
-                                            core::slice::from_raw_parts_mut(p.add(pq), dh),
-                                            core::slice::from_raw_parts_mut(p.add(pk), dh),
-                                            core::slice::from_raw_parts(p.add(t * rin + 2 * d + hh * dh), dh),
-                                            core::slice::from_raw_parts(p.add(t * rin + 3 * d + hh * dh), dh),
-                                            core::slice::from_raw_parts_mut(op.get().add(po), dh),
-                                            core::slice::from_raw_parts_mut(sp.get().add(ps), dh * dh),
-                                            (*p.add(t * rin + 4 * d + hh), *p.add(t * rin + 4 * d + h + hh)),
-                                        )
-                                    };
-                                    let g = (ly.neg_a[hh], ly.dt_bias[hh]);
-                                    head_step(simd, qh, kh, vh, gt, ab, g, oh, sh, &mut scratch, qs, m.eps);
-                                }
-                            }
-                        },
-                    )
-                };
-                pool::get(r.nth).run(&job);
-            } else {
-                for t in 0..bt {
-                    let p = &mut pb[t * rin..(t + 1) * rin];
-                    let (qkv, rest) = p.split_at_mut(3 * d);
-                    let (gt, ab) = rest.split_at(d);
-                    let (q, kv) = qkv.split_at_mut(d);
-                    let (k, vv) = kv.split_at_mut(d);
-                    let o = &mut ob[t * dp..(t + 1) * dp];
-                    for hh in 0..h {
-                        head_step(
-                            simd,
-                            &mut q[hh * dh..(hh + 1) * dh],
-                            &mut k[hh * dh..(hh + 1) * dh],
-                            &vv[hh * dh..(hh + 1) * dh],
-                            &gt[hh * dh..(hh + 1) * dh],
-                            (ab[hh], ab[h + hh]),
-                            (ly.neg_a[hh], ly.dt_bias[hh]),
-                            &mut o[hh * dh..(hh + 1) * dh],
-                            &mut sl[hh * dh * dh..(hh + 1) * dh * dh],
-                            &mut scratch,
-                            qs,
-                            m.eps,
-                        );
-                    }
-                }
-            }
-            for t in 0..bt {
-                ob[t * dp + d..(t + 1) * dp].fill(0.0);
-            }
-            matmul(
-                simd,
-                &ly.o,
-                MatIn {
-                    x: ob,
-                    ldx: dp,
-                    t: bt,
-                    cols: d,
-                },
-                xb,
-                dp,
-                true,
-                r.nth,
-            );
-            for t in 0..bt {
-                rms(&xb[t * dp..(t + 1) * dp], &mut nb[t * dp..(t + 1) * dp], d, m.eps);
-            }
-            matmul(
-                simd,
-                &ly.up,
-                MatIn {
-                    x: nb,
-                    ldx: dp,
-                    t: bt,
-                    cols: d,
-                },
-                ub,
-                2 * hp,
-                false,
-                r.nth,
-            );
-            for t in 0..bt {
-                let uu = &ub[t * 2 * hp..(t + 1) * 2 * hp];
-                let mh = &mut mb[t * hp..(t + 1) * hp];
-                silu_mul(simd, &mut mh[..hid], &uu[..hid], &uu[hid..2 * hid]);
-                mh[hid..].fill(0.0);
-            }
-            matmul(
-                simd,
-                &ly.down,
-                MatIn {
-                    x: mb,
-                    ldx: hp,
-                    t: bt,
-                    cols: hid,
-                },
-                xb,
-                dp,
-                true,
-                r.nth,
-            );
-        }
+        stack_impl(simd, m, xb, rest, bt_max, bt, r.state, r.nth);
+        let nb = &mut rest[..bt_max * dp];
         if r.all_logits {
             for t in 0..bt {
                 rms(&xb[t * dp..(t + 1) * dp], &mut nb[t * dp..(t + 1) * dp], d, m.eps);

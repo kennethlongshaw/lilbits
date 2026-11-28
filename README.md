@@ -12,6 +12,8 @@ The repo collects interchangeable building blocks, each with tests and a dense F
 - **Training:** a Lightning Fabric loop, Muon and DeepSeek-style Muon, FP warm start → LittleBit conversion, and Optuna sweeps.
 - **Measurement:** quality, stored size, RAM, peak memory, CPU time and wall time for both training and inference.
 
+**Start here:** `examples/flagship_edge_lm.py` is the current best edge LM end to end (train → W8A8 → standalone Rust CLI), see `results/flagship/README.md`.
+
 `src/` holds the primitives, `examples/` shows how to combine them, and `benchmarks/` runs examples or primitives
 side by side on every dimension. `docs/primitives.md` maps the target architectures (looped LittleBit core,
 sparse state index, MTP/verify, typed decision readout) to what exists and what is still missing.
